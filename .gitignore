@@ -1,0 +1,31 @@
+# Live patrols and generated transcripts stay outside source control.
+.sessions/
+sessions/
+session/
+**/private.json
+**/public.json
+**/session.lock
+Patrol_Brief.md
+CAPTAIN_NOTES.md
+orders/
+debriefs/
+checkpoints/
+*.zip
+*.bundle
+
+# Local configuration, credentials, and Python outputs.
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.DS_Store
