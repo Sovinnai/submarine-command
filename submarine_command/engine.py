@@ -20,7 +20,7 @@ from .locking import session_lock
 from .observations import observed_bearing_drift
 from .platforms import KESTREL
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 TICK = 5
 END = 290
 REPORT_DUE = 260
@@ -47,6 +47,27 @@ MISSION = {
     "intel": "0200 shore estimate: submerged transit is possible; no reliable identification or contact solution. Commercial and survey traffic also use the passage.",
     "radio": "An intelligence update is scheduled for 0330; a later update for 0510. Messages remain available for retrieval.",
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
+}
+COMMAND_CONTRACT = {
+    "player_command_window": {
+        "minimum_minutes": 5,
+        "maximum_minutes": 60,
+        "increment_minutes": TICK,
+        "description": "The captain chooses one command window; thinking and reviewing existing reports consume no simulated time.",
+    },
+    "integration": {
+        "step_minutes": TICK,
+        "description": "The engine resolves all platform movement and world effects on one shared clock in five-minute steps. Five minutes is sufficient for this prototype's coarse navigation, contact, link, and equipment decisions; acceleration, turn rate, and sub-step event timing are deliberately simplified.",
+    },
+    "concurrency": {
+        "maneuver": "Course, speed, and depth settings take effect at the start of the first five-minute step and remain in force. Own ship and opposing platforms then move over the same elapsed step.",
+        "observation": "Passive or focused acoustic integration occupies each complete five-minute step and runs concurrently with movement and the selected equipment activity. Results are reported at the step endpoint.",
+        "active": "The active transmission and its observation integration occupy the first five-minute step; later requested steps revert to passive observation.",
+        "mast": "Mast deployment, visual observation, and recovery form a five-minute cycle concurrent with movement. Results are available at the step endpoint.",
+        "communications": "Each receive or transmit link attempt occupies one five-minute step, includes mast deployment and recovery, and runs concurrently with movement and passive observation. A usable receive link or acknowledged transmission completes the task; a failed link may be retried in a later step unless selected as an interrupt.",
+        "repair": "Repair needs 20 productive minutes at no more than the published repair speed. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
+    },
+    "interrupts": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category and report id from that boundary; the unused portion is never continued automatically.",
 }
 
 
@@ -292,9 +313,12 @@ def tick_world(state, dice, order, first_tick):
     state["t"] += TICK
     t = state["t"]
     active = order["activity"] == "active" and first_tick
-    move(state["own"])
+    # Decisions use the common start-of-step geometry. Movement is then
+    # integrated for every platform over the same elapsed interval.
     for actor in state["actors"]:
         opponent_step(state, actor, dice, active)
+    move(state["own"])
+    for actor in state["actors"]:
         move(actor)
     if active:
         report(state, "Sonar", "One active acoustic transmission made.", "emission")
@@ -398,32 +422,55 @@ def validate_order(raw, state):
 
 def simulate(state, seed, order):
     state["last_action_report_start"] = len(state["reports"])
+    requested = order["minutes"]
     if order["activity"] == "end":
         state["ended"] = True
         state["end_reason"] = "Captain ended the exercise"
-        report(state, "Exercise", "Exercise ended by the captain.", "exercise_end")
-        return {"elapsed_minutes": 0, "stop_reason": "exercise_end"}
+        ending = report(state, "Exercise", "Exercise ended by the captain.", "exercise_end")
+        return {"requested_minutes": 0, "elapsed_minutes": 0, "unused_minutes": 0,
+                "integration_steps": 0, "stop_reason": "exercise_end",
+                "stop_events": [{"category": "exercise_end", "report_ids": [ending["id"]]}]}
     start = state["t"]
     dice = Dice(seed, state["rng_trace"])
     for field in ("course", "speed", "depth"):
         state["own"][field] = float(order[field])
     state["focus"] = order.get("focus") if order["activity"] == "focus" else None
     stop = "requested_interval_complete"
+    stop_events = []
     for i in range(order["minutes"] // TICK):
         before = len(state["reports"])
         tick_world(state, dice, order, first_tick=i == 0)
-        categories = {r["category"] for r in state["reports"][before:]}
+        new_reports = state["reports"][before:]
+        categories = {r["category"] for r in new_reports}
+        matched = categories.intersection(order["interrupt_on"])
         if state["ended"]:
             stop = "exercise_end"
+            stop_events = _execution_events(new_reports, {"exercise_end"} | matched)
             break
-        if "transmission_complete" in categories or "message_received" in categories or "repair_complete" in categories:
+        completed = categories.intersection(
+            {"transmission_complete", "message_received", "radio_empty", "repair_complete"}
+        )
+        if completed:
             stop = "task_complete"
+            stop_events = _execution_events(new_reports, completed | matched)
             break
-        matched = categories.intersection(order["interrupt_on"])
         if matched:
-            stop = "interrupt:" + ",".join(sorted(matched))
+            stop = "interrupt"
+            stop_events = _execution_events(new_reports, matched)
             break
-    return {"elapsed_minutes": state["t"] - start, "stop_reason": stop}
+    elapsed = state["t"] - start
+    return {"requested_minutes": requested, "elapsed_minutes": elapsed,
+            "unused_minutes": requested - elapsed, "integration_steps": elapsed // TICK,
+            "stop_reason": stop, "stop_events": stop_events}
+
+
+def _execution_events(reports, categories):
+    """Summarize public reasons for stopping at an integration boundary."""
+    return [
+        {"category": category,
+         "report_ids": [entry["id"] for entry in reports if entry["category"] == category]}
+        for category in sorted(categories)
+    ]
 
 
 def public_view(game):
@@ -444,6 +491,7 @@ def public_view(game):
             "time": clock(state["t"]), "elapsed_minutes": state["t"], "ended": state["ended"],
             "initial_commitment_sha256": game["commitment"], "turn_receipt_sha256": game["head"],
             "engine_sha256": game["engine_sha256"], "mission": copy.deepcopy(MISSION),
+            "command_contract": copy.deepcopy(COMMAND_CONTRACT),
             "platform_capabilities": KESTREL.public_capabilities(),
             "own_ship": {"name": "Kestrel", "east_nm": round(own["x"], 3), "north_nm": round(own["y"], 3),
                          "course_true": own["course"], "speed_knots": own["speed"], "depth_feet": own["depth"],

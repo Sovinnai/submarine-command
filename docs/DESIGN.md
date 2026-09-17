@@ -23,6 +23,29 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
+In rules version 0.3, a command window is 5–60 minutes in five-minute increments.
+Five minutes is the minimum resolution needed by the prototype's coarse
+navigation, contact, communications and equipment choices. Events are therefore
+located at step boundaries; sub-step timing, acceleration and turn rate are
+deliberate simplifications. Opposing decisions use start-of-step information,
+then every platform moves over the same elapsed step. No side receives a frozen
+movement interval.
+
+Maneuver settings apply at the beginning of the first step and persist.
+Acoustic integration runs during every complete step, concurrently with movement
+and the selected equipment activity, and reports at its endpoint. An active pulse
+occupies the first integration step. Mast observation and each link attempt are
+five-minute deployment, operation and recovery cycles. A usable receive link or
+acknowledged transmission completes the communications task. Repair requires
+twenty productive minutes within its operating envelope and retains progress
+between command windows.
+
+At each boundary, exercise completion, task completion and selected interrupts
+return control. The execution receipt gives requested, actual and unused minutes
+and identifies every stopping event by public report ID. Remaining time is
+discarded, never silently continued. Reading status, history, capabilities or an
+existing report is outside simulated time and performs no random draw.
+
 The interface presents what the boat can know: own-ship status, observed
 bearings and frequency lines, uncertain classifications, messages and mission
 constraints. A tactical display depicts observations and assessed uncertainty.

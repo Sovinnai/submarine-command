@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.2.** The hidden-state and replay foundation
+**Status: early prototype, version 0.3.** The hidden-state and replay foundation
 works. The acoustic and platform fidelity still needs substantial development.
 Unsupported systems are explicitly identified in the capability report.
 
@@ -65,9 +65,26 @@ python -m submarine_command --session .sessions/my-patrol verify
 Supported activities are `listen`, `focus`, `active`, `mast`, `receive`,
 `transmit`, `repair`, and `end`. Except for `end`, an order may also include
 `course`, `speed`, and `depth`. Orders run for 5–60 minutes in five-minute steps,
-with interruption on the selected events. Active means one pulse on the first
-tick, followed by passive listening. Maneuvers establish the commanded settings
-for the first tick; accelerations and transient depth changes are abstracted.
+with interruption on the selected events. Every result's `last_execution` states
+the requested, elapsed, and unused minutes; its stop reason and public report IDs
+explain why control returned. The unused portion is never resumed automatically.
+
+The engine uses one shared clock. At each step, opposing decisions use the
+start-of-step geometry, then own ship and every opposing platform move across the
+same five minutes. Maneuver settings apply at the start of the first step;
+acceleration, turn rate, and transient depth changes are deliberately abstracted.
+Passive or focused observation integration runs concurrently and reports at the
+step endpoint. Active means one pulse during the first step, followed by passive
+listening.
+
+Mast observation and each communications attempt are five-minute deployment,
+operation, and recovery cycles concurrent with movement and passive observation.
+A usable receive link—whether or not a message is waiting—or an acknowledged
+transmission completes that task and returns control. A failed link consumes its
+five minutes and is retried during the same command window unless `radio_failure`
+is an interrupt. Repair requires 20 productive minutes at 10 knots or less,
+persists across command windows, and is concurrent with movement and observation.
+The public `command_contract` reports these rules in machine-readable form.
 
 A transmission requires `assessment` (`submerged_present`,
 `surface_or_biologic`, or `unresolved`), a `message`, and optionally a `basis`
