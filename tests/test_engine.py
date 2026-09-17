@@ -114,7 +114,8 @@ class EngineTests(unittest.TestCase):
             self.order(minutes=30, interrupt_on=["equipment", "deadline"]), state
         )
 
-        def interrupting_tick(current, _dice, _order, _first_tick):
+        def interrupting_tick(current, _dice, _order, first_tick):
+            self.assertTrue(first_tick)
             current["t"] += e.TICK
             e.report(current, "Engineering", "Test fault.", "equipment")
             e.report(current, "Navigation", "Test deadline.", "deadline")
