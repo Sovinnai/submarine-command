@@ -20,7 +20,7 @@ from .locking import session_lock
 from .observations import observed_bearing_drift
 from .platforms import KESTREL
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 TICK = 5
 END = 290
 REPORT_DUE = 260
@@ -68,6 +68,10 @@ COMMAND_CONTRACT = {
         "repair": "Repair needs 20 productive minutes at no more than the published repair speed. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
     },
     "interrupts": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category and report id from that boundary; the unused portion is never continued automatically.",
+}
+PUBLIC_REPORT_FIELDS = {
+    "id", "time", "elapsed_minutes", "department", "category", "text",
+    "contact", "observation", "visual", "message_id", "transmitted",
 }
 
 
@@ -507,6 +511,17 @@ def public_view(game):
             "last_execution": copy.deepcopy(game["events"][-1]["execution"]) if game["events"] else None}
 
 
+def public_history(game):
+    """Return only captain-visible reports and previously submitted orders."""
+    reports = [
+        {key: copy.deepcopy(value) for key, value in entry.items()
+         if key in PUBLIC_REPORT_FIELDS}
+        for entry in game["state"]["reports"]
+    ]
+    return {"reports": reports,
+            "orders": [copy.deepcopy(event["raw"]) for event in game["events"]]}
+
+
 def apply_order(game, raw):
     for event in game["events"]:
         if event["raw"].get("id") == raw.get("id"):
@@ -560,9 +575,21 @@ def atomic_json(path, obj):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
+        fsync_directory(path.parent)
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
+
+
+def fsync_directory(path):
+    """Make a completed directory-entry change durable where POSIX permits."""
+    if os.name != "posix":
+        return
+    descriptor = os.open(Path(path), os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def debrief(game):
@@ -623,7 +650,7 @@ def main():
                 elif args.command == "verify":
                     result = integrity
                 elif args.command == "history":
-                    result = {"reports": game["state"]["reports"], "orders": [e["raw"] for e in game["events"]]}
+                    result = public_history(game)
                 elif args.command == "act":
                     raw = json.loads(Path(args.order_file).read_text())
                     if not isinstance(raw, dict):

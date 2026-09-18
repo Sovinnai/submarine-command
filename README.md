@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.3.** The hidden-state and replay foundation
+**Status: early prototype, version 0.4.** The hidden-state and replay foundation
 works. The acoustic and platform fidelity still needs substantial development.
 Unsupported systems are explicitly identified in the capability report.
 
@@ -36,6 +36,30 @@ An editable install also supplies a `submarine-command` executable:
 python -m pip install -e .
 submarine-command capabilities
 ```
+
+## Restricted narrator interface
+
+A model-independent JSON-lines broker exposes public game operations without
+giving the narrator a save path. A trusted host can start it with private storage
+outside the narrator's filesystem:
+
+```bash
+submarine-command-narrator --storage-root /var/lib/submarine-command
+```
+
+The broker accepts `capabilities`, `start`, `status`, `history`, `act`, `verify`,
+and post-exercise `debrief` requests on standard input and writes one response
+per line on standard output. Sessions are addressed by opaque bearer tokens.
+There is no session-listing, raw-state, arbitrary-file, or in-play debrief
+operation. Narrator orders must include both a unique order ID and the current
+`expected_turn`. Session creation requires a trusted-host-generated secret
+idempotency key so a lost response can be retried without rerolling the world.
+
+The broker is the application boundary, not an operating-system sandbox. A
+narrator that shares its service account or retains unrestricted shell and
+filesystem tools could still bypass it. For enforced blindness, run the broker
+under a dedicated account or container and give the narrator only the broker's
+request channel. See [Narrator protocol](docs/NARRATOR_PROTOCOL.md).
 
 The default session directory is `.sessions/glass-strait` beneath the current
 working directory. Live sessions are ignored by Git. No live campaign is shipped
@@ -113,6 +137,7 @@ verification. During active play, debrief refuses to reveal anything.
 | Opposition | Limited-information detection and a simple evasive response |
 | Weapons | Observation-only exercise policy; no inventory or employment resolution |
 | Engineering | An auxiliary-noise fault and timed repair |
+| Narrator interface | Restricted local JSON-lines broker with opaque sessions and public-only operations |
 
 All current platform values and probabilities are fictional game parameters.
 They are not real class specifications. A capability that is not modeled cannot
@@ -122,6 +147,7 @@ be invented by the narrator to answer a question or resolve an order.
 
 - [Game design](docs/DESIGN.md): turn-based play and idealized physical quantities.
 - [Architecture](docs/ARCHITECTURE.md): truth, beliefs, observations and audit boundaries.
+- [Narrator protocol](docs/NARRATOR_PROTOCOL.md): restricted operations and deployment boundary.
 - [GitHub issues](https://github.com/Sovinnai/submarine-command/issues): all development tasks, priorities and acceptance criteria.
 - [Working agreement](AGENTS.md): implementation and narration invariants.
 
