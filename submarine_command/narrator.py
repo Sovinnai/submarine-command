@@ -24,6 +24,7 @@ from .platforms import KESTREL
 PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = 64 * 1024
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{43}")
+IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9_-]{32,200}")
 REQUEST_FIELDS = {"v", "request_id", "op", "session_id", "params"}
 OPERATIONS = {"capabilities", "start", "status", "history", "act", "verify", "debrief"}
 
@@ -71,12 +72,17 @@ class SessionStore:
             except BaseException:
                 path.unlink(missing_ok=True)
                 raise
+            engine.fsync_directory(self.root)
             return key
 
     def _id_for_key(self, idempotency_key):
-        if not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 200:
+        if (
+            not isinstance(idempotency_key, str)
+            or IDEMPOTENCY_KEY.fullmatch(idempotency_key) is None
+        ):
             raise NarratorError(
-                "invalid_request", "start requires an idempotency_key of 1 to 200 characters."
+                "invalid_request",
+                "start requires a secret URL-safe idempotency_key of 32 to 200 characters.",
             )
         token = hmac.new(
             self._service_key, idempotency_key.encode("utf-8"), hashlib.sha256
@@ -129,9 +135,12 @@ class SessionStore:
     def start(self, idempotency_key):
         session_id = self._id_for_key(idempotency_key)
         folder = self._folder(session_id, require_existing=False)
+        created = not folder.exists()
         folder.mkdir(mode=0o700, exist_ok=True)
         if os.name == "posix":
             folder.chmod(0o700)
+        if created:
+            engine.fsync_directory(self.root)
         with session_lock(folder / "session.lock"):
             path = self._private_path(folder)
             if path.exists():
@@ -299,7 +308,7 @@ def serve(store, source=None, destination=None):
             }
         else:
             response = dispatch(store, raw)
-        destination.write(json.dumps(response, ensure_ascii=False, allow_nan=False) + "\n")
+        destination.write(json.dumps(response, ensure_ascii=True, allow_nan=False) + "\n")
         destination.flush()
 
 

@@ -52,7 +52,8 @@ and post-exercise `debrief` requests on standard input and writes one response
 per line on standard output. Sessions are addressed by opaque bearer tokens.
 There is no session-listing, raw-state, arbitrary-file, or in-play debrief
 operation. Narrator orders must include both a unique order ID and the current
-`expected_turn`.
+`expected_turn`. Session creation requires a trusted-host-generated secret
+idempotency key so a lost response can be retried without rerolling the world.
 
 The broker is the application boundary, not an operating-system sandbox. A
 narrator that shares its service account or retains unrestricted shell and

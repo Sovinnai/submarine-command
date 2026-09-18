@@ -575,9 +575,21 @@ def atomic_json(path, obj):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
+        fsync_directory(path.parent)
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
+
+
+def fsync_directory(path):
+    """Make a completed directory-entry change durable where POSIX permits."""
+    if os.name != "posix":
+        return
+    descriptor = os.open(Path(path), os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def debrief(game):

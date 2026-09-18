@@ -52,12 +52,14 @@ the public platform capability report.
 {"v":1,"request_id":"r1","op":"capabilities","params":{}}
 ```
 
-`start` has no session. Its caller-generated idempotency key makes retries return
-the same initialized world rather than rerolling it. The result contains an
-opaque bearer token and the initial public status.
+`start` has no session. Its trusted-host-generated, URL-safe idempotency key must
+contain at least 128 bits of randomness; the key makes retries return the same
+initialized world rather than rerolling it and must be protected like a
+credential. The result contains an opaque bearer token and the initial public
+status. A weak or reused key could let another client recover that session.
 
 ```json
-{"v":1,"request_id":"r2","op":"start","params":{"idempotency_key":"patrol-launch-7f3d"}}
+{"v":1,"request_id":"r2","op":"start","params":{"idempotency_key":"7f3d9c0e1b2a4d5f60718293a4b5c6d7"}}
 ```
 
 `status`, `history` and `verify` are read-only. They require the opaque

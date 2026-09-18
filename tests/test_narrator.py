@@ -12,6 +12,7 @@ from submarine_command import narrator
 
 class NarratorInterfaceTests(unittest.TestCase):
     TEST_SEED = "ef" * 32
+    START_KEY = "a1" * 16
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -25,7 +26,7 @@ class NarratorInterfaceTests(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.started = self.store.start("disposable-test-session")
+        self.started = self.store.start(self.START_KEY)
         self.session_id = self.started["session_id"]
 
     def request(self, operation, params=None, session=True, request_id="request-1"):
@@ -92,7 +93,7 @@ class NarratorInterfaceTests(unittest.TestCase):
     def test_start_and_action_retries_are_idempotent(self):
         private = self.store.root / self.session_id / "private.json"
         before = private.read_bytes()
-        retry_start = self.store.start("disposable-test-session")
+        retry_start = self.store.start(self.START_KEY)
         self.assertEqual(self.started, retry_start)
         self.assertEqual(before, private.read_bytes())
 
@@ -177,6 +178,16 @@ class NarratorInterfaceTests(unittest.TestCase):
         self.assertEqual("unknown_session", response["error"]["code"])
         self.assert_public(response)
 
+        weak_start = {
+            "v": 1,
+            "request_id": "x",
+            "op": "start",
+            "params": {"idempotency_key": "guessable"},
+        }
+        response = narrator.dispatch(self.store, json.dumps(weak_start).encode())
+        self.assertFalse(response["ok"])
+        self.assertEqual("invalid_request", response["error"]["code"])
+
     def test_corrupt_save_returns_only_generic_error(self):
         private = self.store.root / self.session_id / "private.json"
         private.write_text('{"seed":"do-not-leak","broken":true}', encoding="utf-8")
@@ -210,6 +221,16 @@ class NarratorInterfaceTests(unittest.TestCase):
         self.assertEqual("request_too_large", responses[0]["error"]["code"])
         self.assertTrue(responses[1]["ok"])
         self.assertEqual("after-large", responses[1]["request_id"])
+
+    def test_stdio_safely_escapes_non_scalar_request_id(self):
+        source = io.BytesIO(
+            b'{"v":1,"request_id":"\\ud800","op":"capabilities","params":{}}\n'
+        )
+        destination = io.StringIO()
+        narrator.serve(self.store, source, destination)
+        response = json.loads(destination.getvalue())
+        self.assertTrue(response["ok"])
+        self.assertEqual("\ud800", response["request_id"])
 
 
 if __name__ == "__main__":
