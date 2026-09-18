@@ -42,7 +42,7 @@ class NarratorInterfaceTests(unittest.TestCase):
 
     def assert_public(self, value):
         forbidden = {
-            "seed", "actors", "actor", "kind", "rng_trace", "initial_state",
+            "seed", "actors", "actor", "kind", "spec", "rng_trace", "initial_state",
             "intent", "last_heard", "aware", "bearing_bias", "bulletins",
             "radio_reliability",
         }

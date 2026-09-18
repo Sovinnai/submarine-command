@@ -14,8 +14,12 @@
 | Debrief | Revealed initial state, rules version, action log and outcome analysis | Full history only after the exercise ends and reveal is requested |
 
 The current implementation combines most engine responsibilities in engine.py.
-Platforms, observation-derived calculations and process locking are separate
-modules. docs/DESIGN.md defines the intended gameplay and abstraction contract.
+Immutable entity definitions, observation-derived calculations and process
+locking are separate modules. Vessel and biologic definitions use the same
+geometry, motion, operating-mode and signature contract. Optional resource,
+equipment and inventory components prevent biologics from acquiring meaningless
+vessel systems. docs/DESIGN.md defines the intended gameplay and abstraction
+contract.
 
 ## Randomness
 
@@ -53,8 +57,11 @@ retains shell access under the same account remains policy-only isolation.
 - Categorical signature evidence rather than numeric narrowband spectra.
 - Crew disagreement from different priors applied to shared evidence.
 - Descriptive endpoint bearing drift rather than a TMA fit or statistical solution.
-- A short nuclear patrol with no modeled energy endurance constraint.
+- A short nuclear patrol with no modeled reactor endurance constraint; diesel
+  battery and snorkeling tradeoffs use explicit fictional rates.
 - A single auxiliary fault, a simple opposing reaction and no weapons-resolution model.
+- Surface traffic and biologics have bounded operating-state behavior, not full
+  navigation, tactical doctrine or ecological simulation.
 
 These are visible limits in the current capability report. Narration cannot
 claim systems or observations that the engine does not implement. Development
