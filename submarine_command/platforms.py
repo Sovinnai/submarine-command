@@ -117,7 +117,7 @@ class Equipment:
         return {
             "id": self.identifier,
             "description": self.description,
-            "initial_state": self.initial_state,
+            "configured_state": self.initial_state,
             "implemented": self.implemented_effect is not None,
             "implemented_effect": self.implemented_effect,
         }
