@@ -9,6 +9,7 @@
 | Observer models | Received measurements, missed detections, uncertainty and correlation | Dated measurements and their quality |
 | Belief/assessment models | Crew estimates and each opposing commander's information | Only the player's assessments and observed opponent behavior |
 | Adjudicator | Validated actions, time transitions, event-keyed random draws | Execution receipts and resulting observations |
+| Narrator broker | Private session paths, verified loading, persistence and public operation dispatch | Opaque session identifiers and whitelisted operation results |
 | Narrator | Natural-language order interpretation, explanations and report presentation | Evidence-grounded prose |
 | Debrief | Revealed initial state, rules version, action log and outcome analysis | Full history only after the exercise ends and reveal is requested |
 
@@ -30,9 +31,19 @@ and resulting state hash. Verification rebuilds the initial world and replays
 the action transcript, including cached public outputs.
 
 This makes rewriting detectable against a previously published receipt. It does
-not prove the physics realistic, the probabilities calibrated, or the narrator
-incapable of opening a file. Enforced isolation requires a process/service that
-exposes only allowed commands and has no raw-save endpoint during play.
+not prove the physics realistic or the probabilities calibrated.
+
+The restricted JSON-lines narrator broker exposes only capabilities, session
+creation, public status and history, validated actions, verification and a
+post-exercise debrief. It has no raw-save, path, session-listing or arbitrary-file
+operation. Opaque session identifiers prevent path selection but are bearer
+tokens, not an authorization system.
+
+The process boundary becomes enforced isolation only when the narrator cannot
+open the broker's storage independently. A trusted host must run the broker
+under a separate account, container or equivalent filesystem boundary and grant
+the narrator only its request channel. Starting the broker inside an agent that
+retains shell access under the same account remains policy-only isolation.
 
 ## Known simplifications
 
