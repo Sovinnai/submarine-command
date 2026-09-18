@@ -5,12 +5,16 @@ import sys
 import tempfile
 import unittest
 
+import submarine_command
 from submarine_command import engine
 from submarine_command.observations import observed_bearing_drift
 from submarine_command.platforms import KESTREL
 
 
 class CapabilityTests(unittest.TestCase):
+    def test_exported_package_version_matches_engine_rules(self):
+        self.assertEqual(submarine_command.__version__, engine.VERSION)
+
     def test_brief_and_validation_use_the_same_platform_limits(self):
         game = engine.initialize("34" * 32)
         published = engine.public_view(game)["platform_capabilities"]

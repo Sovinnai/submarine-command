@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from submarine_command import engine as e
@@ -106,6 +107,81 @@ class EngineTests(unittest.TestCase):
             e.apply_order(self.game, self.order(id=f"wait-{len(self.game['events'])}", minutes=60))
         self.assertEqual(self.game["state"]["t"], e.END)
         self.assertTrue(e.debrief(self.game)["verification"]["verified"])
+
+    def test_execution_receipt_reports_actual_unused_time_and_all_interrupts(self):
+        state = copy.deepcopy(self.game["state"])
+        order = e.validate_order(
+            self.order(minutes=30, interrupt_on=["equipment", "deadline"]), state
+        )
+
+        def interrupting_tick(current, _dice, _order, first_tick):
+            self.assertTrue(first_tick)
+            current["t"] += e.TICK
+            e.report(current, "Engineering", "Test fault.", "equipment")
+            e.report(current, "Navigation", "Test deadline.", "deadline")
+
+        with mock.patch.object(e, "tick_world", side_effect=interrupting_tick):
+            execution = e.simulate(state, self.game["seed"], order)
+        self.assertEqual(execution["requested_minutes"], 30)
+        self.assertEqual(execution["elapsed_minutes"], 5)
+        self.assertEqual(execution["unused_minutes"], 25)
+        self.assertEqual(execution["integration_steps"], 1)
+        self.assertEqual(execution["stop_reason"], "interrupt")
+        self.assertEqual(
+            [event["category"] for event in execution["stop_events"]],
+            ["deadline", "equipment"],
+        )
+        self.assertTrue(all(event["report_ids"] for event in execution["stop_events"]))
+
+    def test_usable_empty_receive_completes_one_five_minute_link_cycle(self):
+        self.game["state"]["radio_reliability"] = 1
+        result = e.apply_order(
+            self.game,
+            self.order(
+                id="receive-empty",
+                activity="receive",
+                depth=70,
+                speed=5,
+                minutes=60,
+                interrupt_on=[],
+            ),
+        )
+        execution = result["last_execution"]
+        self.assertEqual(execution["stop_reason"], "task_complete")
+        self.assertEqual(execution["elapsed_minutes"], 5)
+        self.assertEqual(execution["unused_minutes"], 55)
+        self.assertEqual(execution["stop_events"][0]["category"], "radio_empty")
+
+    def test_platforms_move_after_opponent_decisions_on_shared_step(self):
+        state = copy.deepcopy(self.game["state"])
+        initial_own_x = state["own"]["x"]
+        initial_actor_positions = [(actor["x"], actor["y"]) for actor in state["actors"]]
+        seen_own_positions = []
+        order = e.validate_order(self.order(minutes=5), state)
+
+        def capture_start_geometry(current, _actor, _dice, _active):
+            seen_own_positions.append(current["own"]["x"])
+
+        with (
+            mock.patch.object(e, "opponent_step", side_effect=capture_start_geometry),
+            mock.patch.object(e, "observe_contact"),
+        ):
+            e.tick_world(state, e.Dice(self.game["seed"], state["rng_trace"]), order, True)
+        self.assertEqual(seen_own_positions, [initial_own_x] * len(state["actors"]))
+        self.assertNotEqual(state["own"]["x"], initial_own_x)
+        self.assertTrue(
+            all(
+                (actor["x"], actor["y"]) != initial
+                for actor, initial in zip(state["actors"], initial_actor_positions)
+            )
+        )
+
+    def test_public_command_contract_documents_resolution_and_concurrency(self):
+        contract = e.public_view(self.game)["command_contract"]
+        self.assertEqual(contract["integration"]["step_minutes"], e.TICK)
+        self.assertIn("same elapsed step", contract["concurrency"]["maneuver"])
+        self.assertIn("five-minute", contract["concurrency"]["communications"])
+        self.assertIn("20 productive minutes", contract["concurrency"]["repair"])
 
     def test_state_and_transcript_tampering_detected(self):
         e.apply_order(self.game, self.order())
