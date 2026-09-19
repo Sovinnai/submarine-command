@@ -1,3 +1,4 @@
+from dataclasses import asdict
 import json
 from pathlib import Path
 import subprocess
@@ -66,6 +67,40 @@ class CapabilityTests(unittest.TestCase):
         for name in ("direct", "surface_duct", "shadow_zone", "bottom_bounce", "convergence_zone"):
             self.assertIn(name, environment["paths"])
         self.assertIn("no caustic structure", environment["paths"]["convergence_zone"])
+
+    def test_every_supported_activity_publishes_the_envelope_it_is_validated_against(self):
+        game = engine.initialize("56" * 32)
+        published = engine.capability_report()["activities"]
+        self.assertEqual(published["supported"], list(engine.SUPPORTED_ACTIVITIES))
+        for name in engine.SUPPORTED_ACTIVITIES:
+            self.assertIn(name, published["envelopes"], name)
+        # A speed-limited activity is accepted at its published limit and
+        # rejected just above it, so the published number is the enforced one
+        # rather than a description of it.
+        for name in ("repair", "sound_profile"):
+            limit = published["envelopes"][name]["maximum_speed_knots"]
+            self.assertIsNotNone(limit, name)
+            engine.validate_order({"id": f"{name}-at-limit", "activity": name,
+                                   "minutes": 5, "speed": limit}, game["state"])
+            with self.assertRaises(ValueError, msg=name):
+                engine.validate_order({"id": f"{name}-over", "activity": name, "minutes": 5,
+                                       "speed": limit + 0.5, "operating_mode": "high_power"},
+                                      game["state"])
+
+    def test_link_activities_publish_the_mast_envelope_that_gates_them(self):
+        game = engine.initialize("67" * 32)
+        envelopes = engine.capability_report()["activities"]["envelopes"]
+        for name in ("mast", "receive", "transmit"):
+            mast = envelopes[name]["mast_envelope"]
+            self.assertEqual(mast, asdict(KESTREL.mast), name)
+        limits = envelopes["receive"]["mast_envelope"]
+        engine.validate_order({"id": "rx", "activity": "receive",
+                               "depth": limits["maximum_depth_feet"],
+                               "speed": limits["maximum_speed_knots"]}, game["state"])
+        with self.assertRaises(ValueError):
+            engine.validate_order({"id": "rx-fast", "activity": "receive",
+                                   "depth": limits["maximum_depth_feet"],
+                                   "speed": limits["maximum_speed_knots"] + 1}, game["state"])
 
     def test_catalog_defines_every_requested_entity_category(self):
         self.assertEqual(

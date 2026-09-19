@@ -92,11 +92,13 @@ COMMAND_CONTRACT = {
         "active": "The active transmission and its observation integration occupy the first five-minute step; later requested steps revert to passive observation.",
         "mast": "Mast deployment, visual observation, and recovery form a five-minute cycle concurrent with movement. Results are available at the step endpoint.",
         "communications": "Each receive or transmit link attempt occupies one five-minute step, includes mast deployment and recovery, and runs concurrently with movement and passive observation. A usable receive link or acknowledged transmission completes the task; a failed link may be retried in a later step unless selected as an interrupt.",
-        "sound_profile": "A sound-speed observation occupies the first five-minute step, runs concurrently with movement and passive observation, and completes the task. It replaces the onboard profile estimate with a measurement at that position and time; the estimate then ages while the true field keeps changing.",
+        "sound_profile": "A sound-speed observation occupies the first five-minute step, requires the published maximum speed for the activity or less, runs concurrently with movement and passive observation, and completes the task. It replaces the onboard profile estimate with a measurement at that position and time; the estimate then ages while the true field keeps changing.",
         "repair": "Repair needs 20 productive minutes at no more than the published repair speed. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
     },
     "interrupts": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category and report id from that boundary; the unused portion is never continued automatically.",
 }
+SUPPORTED_ACTIVITIES = ("listen", "focus", "active", "mast", "receive", "transmit",
+                        "repair", "sound_profile", "end")
 PUBLIC_REPORT_FIELDS = {
     "id", "time", "elapsed_minutes", "department", "category", "text",
     "contact", "observation", "visual", "message_id", "transmitted",
@@ -817,7 +819,7 @@ def validate_order(raw, state):
     order = copy.deepcopy(raw)
     order.setdefault("activity", "listen")
     activity = order["activity"]
-    if activity not in ("listen", "focus", "active", "mast", "receive", "transmit", "repair", "sound_profile", "end"):
+    if activity not in SUPPORTED_ACTIVITIES:
         raise ValueError("Unsupported activity. No time has elapsed; agree on an applicable rule before proceeding.")
     order.setdefault("minutes", 0 if activity == "end" else 15)
     minutes = order["minutes"]
@@ -941,6 +943,54 @@ def _execution_events(reports, categories):
     ]
 
 
+def activity_envelopes(spec):
+    """Every supported activity with the envelope validation enforces on it.
+
+    Read from the same specification fields `validate_order` checks, so the two
+    cannot drift apart. A captain can construct a valid order from this rather
+    than discovering a limit by having one rejected.
+    """
+    mast = ({"minimum_depth_feet": spec.mast.minimum_depth_feet,
+             "maximum_depth_feet": spec.mast.maximum_depth_feet,
+             "maximum_speed_knots": spec.mast.maximum_speed_knots}
+            if spec.mast else None)
+    described = {
+        "listen": {"requires": None,
+                   "description": "Passive acoustic integration over each step."},
+        "focus": {"requires": "An existing contact id in the focus field.",
+                  "description": "Focused analysis of one contact; other contacts are attended to less closely."},
+        "active": {"requires": None,
+                   "description": "One active transmission in the first step, then passive observation."},
+        "mast": {"requires": "Depth and speed within the mast envelope.",
+                 "description": "Mast deployment, visual observation and recovery in one step.",
+                 "mast_envelope": mast},
+        "receive": {"requires": "Depth and speed within the mast envelope.",
+                    "description": "One receive link attempt per step.",
+                    "mast_envelope": mast},
+        "transmit": {"requires": "Depth and speed within the mast envelope, plus an assessment, a message and a basis of existing report ids.",
+                     "description": "One transmit attempt per step.",
+                     "mast_envelope": mast},
+        "repair": {"requires": (f"At most {spec.repair_maximum_speed_knots:g} knots."
+                                if spec.repair_maximum_speed_knots is not None else None),
+                   "description": "Twenty productive minutes to clear a reported fault; progress is retained across command windows.",
+                   "maximum_speed_knots": spec.repair_maximum_speed_knots},
+        "sound_profile": {"requires": (f"At most {spec.profile_maximum_speed_knots:g} knots."
+                                       if spec.profile_maximum_speed_knots is not None else None),
+                          "description": "One five-minute sound-speed observation that replaces the onboard profile estimate with a measurement at this position and time.",
+                          "maximum_speed_knots": spec.profile_maximum_speed_knots},
+        "end": {"requires": "Zero minutes and no other fields.",
+                "description": "End the exercise and release the debrief."},
+    }
+    return {
+        name: {**described[name],
+               "implemented": (described[name].get("maximum_speed_knots") is not None
+                               if name in ("repair", "sound_profile")
+                               else mast is not None if name in ("mast", "receive", "transmit")
+                               else True)}
+        for name in SUPPORTED_ACTIVITIES
+    }
+
+
 def capability_report():
     result = KESTREL.public_capabilities()
     result["entity_model"] = {
@@ -956,6 +1006,14 @@ def capability_report():
             "Opposing entity specifications remain hidden until supported "
             "observations identify them."
         ),
+    }
+    result["activities"] = {
+        "supported": list(SUPPORTED_ACTIVITIES),
+        "minutes": {"minimum": TICK, "maximum": 60, "increment": TICK,
+                    "note": "Zero minutes for end."},
+        "envelopes": activity_envelopes(KESTREL),
+        "note": ("Published from the same platform fields command validation reads. An activity "
+                 "listed as not implemented for this platform is rejected before any state changes."),
     }
     result["acoustic_model"] = {
         "reference_levels": {
