@@ -10,6 +10,12 @@ from submarine_command import engine
 from submarine_command import narrator
 
 
+def narrator_order(**kwargs):
+    """A fully stated order; the engine defaults no field."""
+    return {"activity": "listen", "minutes": 5, "interrupt_on": [], "course": 90,
+            "speed": 5, "depth": 400, "operating_mode": "standard", **kwargs}
+
+
 class NarratorInterfaceTests(unittest.TestCase):
     TEST_SEED = "ef" * 32
     START_KEY = "a1" * 16
@@ -69,12 +75,7 @@ class NarratorInterfaceTests(unittest.TestCase):
         action = self.request(
             "act",
             {
-                "order": {
-                    "id": "narrator-order-1",
-                    "expected_turn": 0,
-                    "minutes": 5,
-                    "interrupt_on": [],
-                }
+                "order": narrator_order(id="narrator-order-1", expected_turn=0)
             },
         )
         for response in (capability, status, history, verification, action):
@@ -97,14 +98,7 @@ class NarratorInterfaceTests(unittest.TestCase):
         self.assertEqual(self.started, retry_start)
         self.assertEqual(before, private.read_bytes())
 
-        params = {
-            "order": {
-                "id": "retry-order",
-                "expected_turn": 0,
-                "minutes": 5,
-                "interrupt_on": [],
-            }
-        }
+        params = {"order": narrator_order(id="retry-order", expected_turn=0)}
         first = self.request("act", params)
         saved = private.read_bytes()
         second = self.request("act", params, request_id="request-2")
@@ -113,7 +107,7 @@ class NarratorInterfaceTests(unittest.TestCase):
 
     def test_narrator_orders_require_expected_turn_and_reject_stale_state(self):
         missing = self.request(
-            "act", {"order": {"id": "missing-turn", "minutes": 5}}
+            "act", {"order": narrator_order(id="missing-turn")}
         )
         self.assertFalse(missing["ok"])
         self.assertEqual("invalid_request", missing["error"]["code"])
@@ -121,11 +115,7 @@ class NarratorInterfaceTests(unittest.TestCase):
         stale = self.request(
             "act",
             {
-                "order": {
-                    "id": "stale-turn",
-                    "expected_turn": 99,
-                    "minutes": 5,
-                }
+                "order": narrator_order(id="stale-turn", expected_turn=99)
             },
         )
         self.assertFalse(stale["ok"])
@@ -145,7 +135,6 @@ class NarratorInterfaceTests(unittest.TestCase):
                     "id": "end-session",
                     "expected_turn": 0,
                     "activity": "end",
-                    "minutes": 0,
                 }
             },
         )

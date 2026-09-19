@@ -60,6 +60,45 @@ class MastEnvelope:
 
 
 @dataclass(frozen=True)
+class ManeuverRates:
+    """Bounded fictional rates for resolving an ordered maneuver over time.
+
+    Depth rate is expressed per knot because a submarine changes depth with
+    planes: at bare steerageway it can barely do so, and at high speed it can
+    do so quickly. That coupling makes going shallow quickly also mean going
+    fast, and therefore loud, without a separate rule.
+    """
+    turn_degrees_per_minute: float
+    acceleration_knots_per_minute: float
+    deceleration_knots_per_minute: float
+    depth_feet_per_minute_per_knot: float
+
+    def depth_rate(self, speed_knots):
+        return self.depth_feet_per_minute_per_knot * abs(speed_knots)
+
+    def speed_rate(self, current_knots, ordered_knots):
+        return (
+            self.acceleration_knots_per_minute
+            if ordered_knots >= current_knots
+            else self.deceleration_knots_per_minute
+        )
+
+    def public_definition(self):
+        return {
+            "turn_degrees_per_minute": self.turn_degrees_per_minute,
+            "acceleration_knots_per_minute": self.acceleration_knots_per_minute,
+            "deceleration_knots_per_minute": self.deceleration_knots_per_minute,
+            "depth_feet_per_minute_per_knot": self.depth_feet_per_minute_per_knot,
+            "depth_rate_note": (
+                "Ordered depth change is resolved at "
+                f"{self.depth_feet_per_minute_per_knot:g} feet per minute for each "
+                "knot of actual speed. This is the rate of a deliberate ordered "
+                "depth change in this game, not a maximum achievable rate."
+            ),
+        }
+
+
+@dataclass(frozen=True)
 class OperatingMode:
     identifier: str
     description: str
@@ -156,6 +195,7 @@ class EntitySpec:
     resources: tuple[ResourceModel, ...] = ()
     mast: MastEnvelope | None = None
     repair_maximum_speed_knots: float | None = None
+    maneuver: ManeuverRates | None = None
     behavior_model: str = "maintain_course"
 
     def mode(self, identifier):
@@ -190,6 +230,9 @@ class EntitySpec:
             "propulsion": self.propulsion.value,
             "operating_envelope": asdict(self.envelope),
             "operating_modes": [asdict(mode) for mode in self.modes],
+            "maneuver_rates": (
+                self.maneuver.public_definition() if self.maneuver else None
+            ),
             "resources": [item.public_definition() for item in self.resources],
             "sensors": [item.public_definition() for item in self.sensors],
             "communications_inventory": [
@@ -335,6 +378,12 @@ KESTREL = EntitySpec(
     ),
     mast=MastEnvelope(60, 80, 8),
     repair_maximum_speed_knots=10,
+    maneuver=ManeuverRates(
+        turn_degrees_per_minute=60,
+        acceleration_knots_per_minute=1,
+        deceleration_knots_per_minute=2,
+        depth_feet_per_minute_per_knot=5,
+    ),
 )
 
 DART = EntitySpec(
