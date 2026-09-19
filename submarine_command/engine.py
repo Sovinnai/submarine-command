@@ -85,7 +85,7 @@ COMMAND_CONTRACT = {
         "mast": "Mast deployment, visual observation, and recovery form a five-minute cycle concurrent with movement. The cycle requires the whole five minutes inside the published mast depth and speed envelope; a step spent transiting toward mast depth defers it and reports the achieved and commanded settings. Results are available at the step endpoint.",
         "communications": "Each receive or transmit link attempt occupies one five-minute step, includes mast deployment and recovery, and runs concurrently with movement and passive observation. Like mast observation, an attempt requires the whole step inside the mast envelope; steps spent reaching it are deferred and reported. A usable receive link or acknowledged transmission completes the task; a failed link may be retried in a later step unless selected as an interrupt.",
         "repair": "Repair needs 20 productive minutes at no more than the published repair speed. Only the minutes actually spent at or below that speed count, so a step spent decelerating earns partial credit. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
-        "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits. Until then the previous mode remains in force and continues to determine own-ship radiated noise.",
+        "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. The mode's published speed limit is its only resolved effect on own ship in this rules version. Own-ship radiated noise and opposing detection are not derived from the operating mode, so selecting a quieter plant state carries no direct counter-detection benefit beyond the speed it permits.",
     },
     "order_fields": {
         "required": ["id", "expected_turn", "activity", "minutes", "course", "speed", "depth", "operating_mode", "interrupt_on"],
@@ -167,13 +167,20 @@ def approach(current, ordered, rate, minutes):
 
 
 def course_step(current, ordered, rate, minutes):
-    """Return the signed shortest-arc turn available in the interval.
+    """Return the shortest-arc turn available in the interval and where it lands.
 
-    An exact reversal is resolved to port so that replay stays deterministic.
+    The landing course is the ordered value itself once the whole remaining
+    difference fits in the interval. Adding the increment instead would leave
+    floating-point dust a hair off the ordered course, which reads as a
+    maneuver still in progress for the rest of the exercise. An exact reversal
+    is resolved to port so that replay stays deterministic.
     """
     difference = (ordered - current + 180) % 360 - 180
     limit = rate * minutes
-    return difference if abs(difference) <= limit else math.copysign(limit, difference)
+    if abs(difference) <= limit:
+        return difference, ordered % 360
+    turn = math.copysign(limit, difference)
+    return turn, (current + turn) % 360
 
 
 def advance_own(state, minutes):
@@ -204,14 +211,15 @@ def advance_own(state, minutes):
         # matching the engine's start-of-step convention for every decision.
         depth_rate = rates.depth_rate(own["speed"])
         speed_rate = rates.speed_rate(own["speed"], ordered["speed"])
-        turn = course_step(own["course"], ordered["course"], rates.turn_degrees_per_minute, span)
+        turn, new_course = course_step(own["course"], ordered["course"],
+                                       rates.turn_degrees_per_minute, span)
         new_speed = approach(own["speed"], ordered["speed"], speed_rate, span)
         # Position uses the mean course and speed over the increment rather
         # than either endpoint, so a turn does not make its whole distance
         # good on the new heading.
         move(own, span, course=(own["course"] + turn / 2) % 360,
              speed=(own["speed"] + new_speed) / 2)
-        own["course"] = (own["course"] + turn) % 360
+        own["course"] = new_course
         own["speed"] = new_speed
         own["depth"] = approach(own["depth"], ordered["depth"], depth_rate, span)
     return {"mast_minutes": within_mast, "repair_minutes": within_repair}
@@ -818,6 +826,16 @@ def capability_report():
     result = KESTREL.public_capabilities()
     result["entity_model"] = {
         "definitions": public_entity_catalog(),
+        "own_ship_operating_mode": {
+            "speed_limit_enforced": True,
+            "radiated_noise_modeled": False,
+            "description": (
+                "An operating mode caps own-ship speed and is reported, but "
+                "own-ship radiated noise and opposing detection are not yet "
+                "derived from it. Opposing detection uses own-ship speed, range "
+                "and active transmission only."
+            ),
+        },
         "maneuver_transients": {
             "own_ship_rate_limited": True,
             "opposing_entities_rate_limited": False,

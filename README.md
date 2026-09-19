@@ -134,16 +134,19 @@ movement and observation.
 The public `command_contract` reports these rules in machine-readable form.
 
 A transmission requires `assessment` (`submerged_present`,
-`surface_or_biologic`, or `unresolved`), a `message`, and optionally a `basis`
-list containing existing report IDs. Link activity requires the published
-mast depth and speed envelope. These are in-game messages only.
+`surface_or_biologic`, or `unresolved`), a `message`, and a `basis` list of
+existing report IDs. Like every other field, `basis` must be stated: an empty
+list is the explicit declaration that the assessment cites no report. Link
+activity requires the published mast depth and speed envelope. These are in-game
+messages only.
 
 Retry an uncertain operation using its **identical order JSON and id**. The engine
 returns the cached result without applying it again. A later order needs a new
 id. A retry of an older order returns its historical result; use `status` for the
 current display. Invalid orders leave the saved state untouched.
 
-To end an exercise early, submit a zero-minute `end` order. At the normal ending
+To end an exercise early, submit an `end` order carrying only `id`,
+`expected_turn` and `activity`; it has no duration. At the normal ending
 or after that order, `debrief` reveals the seed, truth, action log and replay
 verification. During active play, debrief refuses to reveal anything.
 

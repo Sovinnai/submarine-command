@@ -247,8 +247,36 @@ class EngineTests(unittest.TestCase):
             own, spec = game["state"]["own"], e.entity_spec(game["state"]["own"])
             self.assertAlmostEqual(own["depth"], depth)
             self.assertAlmostEqual(own["speed"], speed)
-            self.assertAlmostEqual(own["course"], course)
+            self.assertEqual(own["course"], course)
             self.assertTrue(spec.envelope.allows(own["speed"], own["depth"]))
+
+    def test_completing_a_turn_lands_exactly_on_the_ordered_course(self):
+        """Float dust a hair off the ordered course reads as a maneuver forever.
+
+        The achieved course would display correctly while `in_progress` stayed
+        true, so `maneuver_complete` never fired and a window selecting it as an
+        interrupt ran to its full requested length.
+        """
+        for course in (0.1, 359.9, 105.555, 45.0):
+            game = e.initialize("ab" * 32)
+            result = e.apply_order(game, {
+                "id": "turn", "expected_turn": 0, "activity": "listen",
+                "minutes": 60, "interrupt_on": ["maneuver_complete"],
+                "course": course, "speed": 5, "depth": 400,
+                "operating_mode": "standard"})
+            execution = result["last_execution"]
+            self.assertEqual(game["state"]["own"]["course"], course)
+            self.assertFalse(execution["maneuver"]["course"]["in_progress"])
+            self.assertFalse(game["state"]["maneuvering"])
+            self.assertEqual(execution["stop_reason"], "interrupt")
+            self.assertLess(execution["elapsed_minutes"], 60)
+
+    def test_own_ship_operating_mode_noise_is_declared_unmodeled(self):
+        published = e.capability_report()["entity_model"]["own_ship_operating_mode"]
+        self.assertTrue(published["speed_limit_enforced"])
+        self.assertFalse(published["radiated_noise_modeled"])
+        contract = e.COMMAND_CONTRACT["concurrency"]["operating_mode"]
+        self.assertIn("not derived from the operating mode", contract)
 
     # --- envelope crossings ---
 
