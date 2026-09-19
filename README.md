@@ -10,9 +10,13 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.5.** The hidden-state and replay foundation
-works. The acoustic and platform fidelity still needs substantial development.
-Unsupported systems are explicitly identified in the capability report.
+**Status: early prototype, version 0.6.** The hidden-state and replay foundation
+works, and acoustic reception is resolved through the sonar equation against a
+modelled ocean. Measurement fidelity above that — narrowband lines, separate
+arrays, target motion — still needs substantial development. Unsupported systems
+are explicitly identified in the capability report, and
+[docs/ACOUSTICS.md](docs/ACOUSTICS.md) records what the propagation model does
+and does not compute.
 
 ## Run it
 
@@ -87,7 +91,7 @@ python -m submarine_command --session .sessions/my-patrol verify
 ```
 
 Supported activities are `listen`, `focus`, `active`, `mast`, `receive`,
-`transmit`, `repair`, and `end`. Except for `end`, an order may also include
+`transmit`, `repair`, `sound_profile`, and `end`. Except for `end`, an order may also include
 `course`, `speed`, `depth`, and a published `operating_mode`. Mode-specific and
 platform-wide envelopes are both validated. Orders run for 5–60 minutes in
 five-minute steps, with interruption on the selected events. Every result's
@@ -133,9 +137,11 @@ verification. During active play, debrief refuses to reveal anything.
 | Hidden state | Persistent seed, fixed initial contacts, event-keyed random draws, replay verification, public-only outputs |
 | Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |
-| Sonar | Generic passive reception, focused analysis and active range measurement; signature cues are currently categorical |
-| Observations | Noisy bearings, timestamped own positions, measured bearing drift and correlated evidence windows |
-| Environment | Uncertain layer and simplified loss across it |
+| Sonar | One combined passive receiver resolved per band through `SE = SL - TL - (NL - DI) - DT`; focused analysis; an active pulse with two-way loss and target strength. Signature cues are still categorical, restricted to the bands that actually arrived |
+| Observations | Noisy bearings, timestamped own positions and depth, the band a contact was heard in, measured bearing drift and correlated evidence windows |
+| Environment | A piecewise-linear sound-speed profile, charted bathymetry, bottom class, sea state and shipping drive frequency-dependent transmission loss over named paths — direct, surface duct, shadow zone, bottom bounce and a gated convergence zone — each reporting whether it is supported, uncertain or out of the model's scope |
+| Environmental knowledge | True conditions vary along the passage and with time and are used for adjudication; the captain sees predictions from an onboard profile estimate carrying its age, origin and uncertainty. A `sound_profile` order buys a fresh measurement for one five-minute step |
+| Own-ship noise | Radiated level rises with speed and steps at cavitation inception, which itself rises with depth; self noise rises with speed; a receiver inside the duct sits in a louder noise field |
 | Communications | Mast receive/transmit with persistent link conditions |
 | Opposition | Limited-information detection and a simple evasive response |
 | Resources | Diesel battery use and snorkeling recharge, vessel fuel consumption, and persistent inventories advance on the shared clock |

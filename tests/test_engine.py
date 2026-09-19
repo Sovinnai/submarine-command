@@ -10,7 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from submarine_command import engine as e
-from submarine_command.platforms import BIOLOGIC, DART, ENTITY_REGISTRY
+from submarine_command.platforms import BIOLOGIC, DART, ENTITY_REGISTRY, MERCHANT
 
 
 class EngineTests(unittest.TestCase):
@@ -84,7 +84,10 @@ class EngineTests(unittest.TestCase):
         state["t"] = 5
         dice = e.Dice(self.game["seed"], state["rng_trace"])
         primary = state["actors"][0]
-        with mock.patch.object(e, "entity_noise", return_value=1000):
+        # Force reception without touching the propagation model: a source loud
+        # enough that signal excess is positive at any range in the scenario.
+        loud = (260.0,) * 6
+        with mock.patch.object(e, "source_levels", return_value=loud):
             for minute in (5, 10, 15):
                 state["t"] = minute
                 for _ in range(2):
@@ -220,9 +223,140 @@ class EngineTests(unittest.TestCase):
         class NoDetection:
             def u(self, label):
                 return 0.999999
+
+            def between(self, label, low, high):
+                return low + (high - low) * self.u(label)
         e.opponent_step(state, actor, NoDetection(), False)
         self.assertEqual(before, (actor["course"], actor["speed"]))
         self.assertFalse(actor["aware"])
+
+    def probe(self, own_depth, contact_depth, speed=5.0, contact_speed=4.0, spec=DART,
+              mode="battery", range_nm=8.0):
+        """Score one geometry in a disposable copy of the world."""
+        state = copy.deepcopy(self.game["state"])
+        own = dict(state["own"], x=0.0, y=0.0, depth=own_depth, speed=speed)
+        contact = e.make_entity(spec, id="probe", x=range_nm, y=0.0, course=270.0,
+                                speed=contact_speed, depth=contact_depth)
+        contact["operating_mode"] = mode
+        return e.acoustic_ledger(dict(state, own=own, t=0), own, contact)
+
+    def test_crossing_the_layer_changes_reception_through_the_environment(self):
+        state = self.game["state"]
+        layer_feet = e.acoustics.metres_to_feet(
+            e.ocean_model(state).layer_depth_m(0, 0))
+        deep_contact = layer_feet + 250
+        same_side = self.probe(own_depth=layer_feet + 200, contact_depth=deep_contact)
+        across = self.probe(own_depth=layer_feet - 200, contact_depth=deep_contact)
+        # Worse from the far side of the layer, and worse because the decibel
+        # ledger says so, not because a flag was set.
+        self.assertLess(across["probability"], same_side["probability"])
+        self.assertLess(across["best"]["signal_excess_db"],
+                        same_side["best"]["signal_excess_db"])
+
+    def test_the_duct_carries_a_shallow_contact_that_the_deep_boat_hears_otherwise(self):
+        state = self.game["state"]
+        layer_feet = e.acoustics.metres_to_feet(e.ocean_model(state).layer_depth_m(0, 0))
+        in_duct = self.probe(own_depth=layer_feet - 250, contact_depth=0.0,
+                             spec=MERCHANT, mode="service", contact_speed=10.0)
+        below = self.probe(own_depth=layer_feet + 250, contact_depth=0.0,
+                           spec=MERCHANT, mode="service", contact_speed=10.0)
+        self.assertEqual(in_duct["best"]["path"], "surface_duct")
+        self.assertNotEqual(below["best"]["path"], "surface_duct")
+
+    def test_speed_raises_both_own_noise_and_own_radiated_level(self):
+        quiet = self.probe(own_depth=600, contact_depth=600, speed=5.0)
+        fast = self.probe(own_depth=600, contact_depth=600, speed=15.0)
+        self.assertLess(fast["probability"], quiet["probability"])
+        slow_levels = e.source_levels(dict(self.game["state"]["own"], speed=5.0, depth=600))
+        fast_levels = e.source_levels(dict(self.game["state"]["own"], speed=15.0, depth=600))
+        self.assertTrue(all(f > s for f, s in zip(fast_levels, slow_levels)))
+
+    def test_depth_buys_speed_through_cavitation_inception(self):
+        spec = ENTITY_REGISTRY[self.game["state"]["own"]["spec"]]
+        shallow = spec.signature.cavitation_speed_knots(100)
+        deep = spec.signature.cavitation_speed_knots(700)
+        self.assertGreater(deep, shallow)
+        mode = spec.mode("standard")
+        below = spec.signature.levels_for(mode, shallow - 0.5, 100)
+        above = spec.signature.levels_for(mode, shallow + 0.5, 100)
+        # The step at inception dominates the small speed change either side.
+        self.assertGreater(above[0] - below[0], e.acoustics.CAVITATION_EXCESS_DB - 1)
+
+    def test_opposition_hears_own_ship_through_the_same_environment(self):
+        state = copy.deepcopy(self.game["state"])
+        own = dict(state["own"], x=0.0, y=0.0, depth=500, speed=5)
+        listener = e.make_entity(DART, id="listener", x=6.0, y=0.0, course=270.0,
+                                 speed=4.0, depth=500)
+        outward = e.acoustic_ledger(dict(state, own=own, t=0), listener, own)
+        inward = e.acoustic_ledger(dict(state, own=own, t=0), own, listener)
+        # Transmission loss is reciprocal; the detection decision is not, because
+        # the two platforms differ in what they radiate and what they can hear.
+        self.assertEqual(outward["best"]["transmission_loss_db"],
+                         e.band_entry(inward, outward["best"]["band"])["transmission_loss_db"])
+        self.assertNotEqual(outward["best"]["source_level_db"], inward["best"]["source_level_db"])
+
+    def test_the_decibel_ledger_never_reaches_a_public_report(self):
+        for i in range(6):
+            view = e.apply_order(self.game, self.order(id=f"led{i}", minutes=15))
+        text = json.dumps(view)
+        for leaked in ("signal_excess_db", "acoustic_ledger", "layer_depth_west_m",
+                       "transmission_loss_db", "noise_level_db", "thermocline_gradient"):
+            self.assertNotIn(leaked, text, leaked)
+        # Charted depth is published on purpose; the true sound speed field is not.
+        self.assertIn("charted_water_depth_feet", text)
+        history = json.dumps(e.public_history(self.game))
+        self.assertNotIn("signal_excess_db", history)
+        # It is kept privately, so the debrief can explain every detection.
+        self.assertTrue(self.game["state"]["acoustic_ledger"])
+
+    def test_prediction_comes_from_the_estimate_and_ages_against_truth(self):
+        state = self.game["state"]
+        before = e.public_view(self.game)["acoustic_environment"]
+        self.assertIn("forecast", before["basis"])
+        self.assertEqual(before["age_minutes"], 0)
+        e.apply_order(self.game, self.order(id="run", minutes=60, course=90, speed=12))
+        aged = e.public_view(self.game)["acoustic_environment"]
+        self.assertGreater(aged["age_minutes"], 0)
+        self.assertGreater(aged["distance_from_observation_nm"], 5)
+        # The published layer depth is the estimate, and it does not quietly
+        # track the true layer as the boat runs east.
+        self.assertEqual(aged["estimated_layer_depth_feet"], before["estimated_layer_depth_feet"])
+        truth = e.acoustics.metres_to_feet(
+            e.ocean_model(state).layer_depth_m(state["own"]["x"], state["t"]))
+        self.assertNotAlmostEqual(aged["estimated_layer_depth_feet"], truth, delta=1)
+
+    def test_a_profile_observation_replaces_the_estimate_with_a_measurement(self):
+        e.apply_order(self.game, self.order(id="run", minutes=60, course=90, speed=12))
+        e.apply_order(self.game, self.order(id="bt", activity="sound_profile", minutes=5, speed=5))
+        state = self.game["state"]
+        estimate = state["profile_estimate"]
+        self.assertIn("observation", estimate["source"])
+        self.assertEqual(estimate["taken_minutes"], state["t"])
+        truth = e.ocean_model(state).layer_depth_m(state["own"]["x"], state["t"])
+        # A measurement, not a revelation: close to truth, but not equal to it.
+        self.assertLess(abs(estimate["layer_depth_m"] - truth), 5.0)
+        view = e.public_view(self.game)["acoustic_environment"]
+        self.assertEqual(view["age_minutes"], 0)
+        self.assertLess(view["estimated_layer_uncertainty_feet"], 30)
+
+    def test_an_observation_needs_a_speed_the_platform_supports(self):
+        with self.assertRaises(ValueError):
+            e.validate_order(self.order(activity="sound_profile", speed=16,
+                                        operating_mode="high_power"), self.game["state"])
+
+    def test_published_path_status_is_reported_for_every_modelled_path(self):
+        view = e.public_view(self.game)["acoustic_environment"]
+        for reception in view["predicted_reception"]:
+            names = {entry["path"] for entry in reception["paths"]}
+            self.assertEqual(names, {"direct", "surface_duct", "shadow_zone",
+                                     "bottom_bounce", "convergence_zone"})
+            for entry in reception["paths"]:
+                self.assertIn(entry["status"], {"supported", "uncertain", "out_of_scope"})
+        # This scenario has no depth excess, and says so rather than implying a
+        # convergence zone exists.
+        zone = next(entry for entry in view["predicted_reception"][0]["paths"]
+                    if entry["path"] == "convergence_zone")
+        self.assertEqual(zone["status"], "out_of_scope")
 
     def test_every_world_actor_uses_registered_components_and_valid_geometry(self):
         state = self.game["state"]

@@ -53,9 +53,19 @@ class CapabilityTests(unittest.TestCase):
     def test_unimplemented_capabilities_are_explicit(self):
         public = KESTREL.public_capabilities()
         self.assertFalse(public["sonar"]["towed_array_modeled"])
-        self.assertFalse(public["environment"]["convergence_zone_modeled"])
+        self.assertFalse(public["sonar"]["beam_pattern_modeled"])
         self.assertFalse(public["weapons"]["employment_modeled"])
         self.assertFalse(public["measurements"]["numeric_narrowband_frequencies"])
+        environment = public["environment"]
+        self.assertFalse(environment["ray_solver_modeled"])
+        self.assertFalse(environment["reverberation_modeled"])
+        # Every modelled path states what it is, and the convergence zone is not
+        # advertised as a computed one.
+        self.assertEqual(set(environment["path_status_reported"]),
+                         {"supported", "uncertain", "out_of_scope"})
+        for name in ("direct", "surface_duct", "shadow_zone", "bottom_bounce", "convergence_zone"):
+            self.assertIn(name, environment["paths"])
+        self.assertIn("no caustic structure", environment["paths"]["convergence_zone"])
 
     def test_catalog_defines_every_requested_entity_category(self):
         self.assertEqual(
@@ -84,15 +94,26 @@ class CapabilityTests(unittest.TestCase):
         )
         snorkel = DART.mode("snorkeling")
         battery_mode = DART.mode("battery")
-        self.assertGreater(snorkel.relative_noise, battery_mode.relative_noise)
+        self.assertGreater(snorkel.level_offset_db, battery_mode.level_offset_db)
         self.assertLessEqual(snorkel.depth_maximum_feet, 60)
+        # Snorkeling changes the shape of the signature, not only its level.
+        snorkelling_levels = DART.signature.levels_for(snorkel)
+        battery_levels = DART.signature.levels_for(battery_mode)
+        self.assertGreater(snorkelling_levels[0] - battery_levels[0],
+                           snorkelling_levels[-1] - battery_levels[-1])
 
     def test_biologic_is_a_motion_and_signature_entity_without_vessel_components(self):
         self.assertEqual(BIOLOGIC.category, EntityCategory.BIOLOGIC)
         self.assertGreater(BIOLOGIC.envelope.maximum_depth_feet, 0)
-        self.assertTrue(all(mode.relative_noise > 0 for mode in BIOLOGIC.modes))
         self.assertEqual(BIOLOGIC.sensors, ())
         self.assertEqual(BIOLOGIC.weapons, ())
+        self.assertIsNone(BIOLOGIC.receiver)
+        # A vocalizing group radiates high, where machinery radiates low. The
+        # shape of the signature, not a label, separates the two.
+        levels = BIOLOGIC.signature.source_level_db
+        self.assertGreater(levels[-1], levels[0])
+        self.assertLess(KESTREL.signature.source_level_db[-1],
+                        KESTREL.signature.source_level_db[0])
 
 
 class BearingDriftTests(unittest.TestCase):

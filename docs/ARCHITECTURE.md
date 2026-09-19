@@ -5,7 +5,8 @@
 | Component | Owns | May expose to the narrator |
 |---|---|---|
 | Public scenario/platform | Mission, known equipment, operating limits, applicable orders | All player-known setup and implemented capabilities |
-| World state | Actors, physical positions, signatures, equipment condition, environment, seed | Nothing directly |
+| World state | Actors, physical positions, signatures, equipment condition, the true ocean field, seed | Nothing directly |
+| Acoustic model | Sound-speed profile, bathymetry, propagation paths and the sonar equation; pure functions with no world state or random draws | Path availability and predictions computed from the boat's own estimate |
 | Observer models | Received measurements, missed detections, uncertainty and correlation | Dated measurements and their quality |
 | Belief/assessment models | Crew estimates and each opposing commander's information | Only the player's assessments and observed opponent behavior |
 | Adjudicator | Validated actions, time transitions, event-keyed random draws | Execution receipts and resulting observations |
@@ -51,10 +52,14 @@ retains shell access under the same account remains policy-only isolation.
 
 ## Known simplifications
 
-- One generic acoustic receiver with automatic track/cross-sensor association.
+- One combined acoustic receiver with automatic track/cross-sensor association.
 - Constant settings within five-minute ticks; no turn-rate or acceleration model.
-- Simplified range attenuation and layer loss instead of path-dependent propagation.
-- Categorical signature evidence rather than numeric narrowband spectra.
+- Closed-form propagation paths rather than a ray, mode or full-wave solution;
+  conditions are sampled at each path's midpoint and held constant along it.
+  The bottom-bounce path uses straight-ray geometry, which is its known bias.
+  docs/ACOUSTICS.md records each relation, its source and its validity limits.
+- Categorical signature evidence rather than numeric narrowband spectra, limited
+  to the frequency bands that actually reached the receiver.
 - Crew disagreement from different priors applied to shared evidence.
 - Descriptive endpoint bearing drift rather than a TMA fit or statistical solution.
 - A short nuclear patrol with no modeled reactor endurance constraint; diesel

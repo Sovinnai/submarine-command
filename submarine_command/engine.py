@@ -16,6 +16,7 @@ import secrets
 import sys
 import tempfile
 
+from . import acoustics
 from .locking import session_lock
 from .observations import observed_bearing_drift
 from .platforms import (
@@ -30,7 +31,7 @@ from .platforms import (
     public_entity_catalog,
 )
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 TICK = 5
 END = 290
 REPORT_DUE = 260
@@ -40,6 +41,22 @@ CUES = {
     "faint_cycling_tonal": (0.27, 0.69, 0.22),
     "irregular_broadband": (0.09, 0.19, 0.72),
 }
+# Which bands can carry each classification cue. A cue heard only in the lowest
+# bands cannot be a broadband one; the evidence a track accumulates is limited by
+# the part of the spectrum that actually arrived.
+CUE_BANDS = {
+    "commercial_rhythm": ("b104", "b300", "b866"),
+    "faint_cycling_tonal": ("b035", "b104", "b300"),
+    "irregular_broadband": ("b866", "b2739", "b7746"),
+}
+INTEGRATION_SECONDS = TICK * 60
+FOCUS_GAIN_DB = 3.0
+UNFOCUSED_PENALTY_DB = -1.5
+PUMP_FAULT_SELF_NOISE_DB = 6.0
+ENVIRONMENT_FLUCTUATION_DB = 3.0
+ACTIVE_SOURCE_LEVEL_DB = 215.0
+PROFILE_PREDICTION_RANGE_NM = 10.0
+PROFILE_PREDICTION_DEPTHS_FEET = (0.0, 600.0)
 CUE_TEXT = {
     "commercial_rhythm": "Repeated machinery rhythm with a commercial-like cadence; not diagnostic.",
     "faint_cycling_tonal": "Faint cycling tonal component; source type remains ambiguous.",
@@ -52,7 +69,7 @@ MISSION = {
     "setting": "Fictional ceasefire verification patrol in the Lydian Passage.",
     "task": "Assess whether submerged traffic is using the patrol corridor and send an evidence-based assessment by 0730.",
     "relief": "Be within 3 nautical miles of station RELIEF (24 east, 0 north) at 0800.",
-    "chart": "Local grid in nautical miles: east is +x, north is +y. Patrol corridor: x=0 to 22, y=-6 to +6. All charted water is deep enough for the game envelope.",
+    "chart": "Local grid in nautical miles: east is +x, north is +y. Patrol corridor: x=0 to 22, y=-6 to +6. Charted depth runs from about 8,500 feet in the south-west to under 3,000 feet over the north-eastern shoal; all of it clears the game envelope, but the bottom is close enough in the north-east to change bottom-reflected propagation.",
     "orders": "Observe and report. Preserve discretion and meet the relief commitment. No offensive weapons employment is authorized in this patrol.",
     "intel": "0200 shore estimate: submerged transit is possible; no reliable identification or contact solution. Commercial and survey traffic also use the passage.",
     "radio": "An intelligence update is scheduled for 0330; a later update for 0510. Messages remain available for retrieval.",
@@ -75,6 +92,7 @@ COMMAND_CONTRACT = {
         "active": "The active transmission and its observation integration occupy the first five-minute step; later requested steps revert to passive observation.",
         "mast": "Mast deployment, visual observation, and recovery form a five-minute cycle concurrent with movement. Results are available at the step endpoint.",
         "communications": "Each receive or transmit link attempt occupies one five-minute step, includes mast deployment and recovery, and runs concurrently with movement and passive observation. A usable receive link or acknowledged transmission completes the task; a failed link may be retried in a later step unless selected as an interrupt.",
+        "sound_profile": "A sound-speed observation occupies the first five-minute step, runs concurrently with movement and passive observation, and completes the task. It replaces the onboard profile estimate with a measurement at that position and time; the estimate then ages while the true field keeps changing.",
         "repair": "Repair needs 20 productive minutes at no more than the published repair speed. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
     },
     "interrupts": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category and report id from that boundary; the unused portion is never continued automatically.",
@@ -150,8 +168,131 @@ def contact_kind(entity):
     return entity_spec(entity).contact_domain.value
 
 
-def entity_noise(entity):
-    return entity_spec(entity).mode(entity["operating_mode"]).relative_noise
+def source_levels(entity):
+    """Radiated band levels for this hull's state, speed and depth."""
+    spec = entity_spec(entity)
+    return spec.signature.levels_for(
+        spec.mode(entity["operating_mode"]), entity["speed"], entity["depth"])
+
+
+def ocean_model(state):
+    """Rebuild the true environment field from committed scenario parameters."""
+    ocean = state["ocean"]
+    grid = ocean["bathymetry"]
+    return acoustics.OceanModel(
+        bathymetry=acoustics.Bathymetry(
+            grid["origin_east_nm"], grid["origin_north_nm"], grid["spacing_nm"],
+            tuple(tuple(row) for row in grid["depths_m"])),
+        bottom=ocean["bottom"], sea_state=ocean["sea_state"],
+        shipping_density=ocean["shipping_density"],
+        surface_speed_mps=ocean["surface_speed_mps"],
+        layer_depth_west_m=ocean["layer_depth_west_m"],
+        layer_depth_east_m=ocean["layer_depth_east_m"],
+        layer_variation_m=ocean["layer_variation_m"],
+        layer_period_minutes=ocean["layer_period_minutes"],
+        west_east_span_nm=ocean["west_east_span_nm"],
+        duct_gradient=ocean["duct_gradient"],
+        thermocline_gradient=ocean["thermocline_gradient"],
+        deep_gradient=ocean["deep_gradient"],
+        thermocline_thickness_m=ocean["thermocline_thickness_m"])
+
+
+def true_environment(state, first, second):
+    """True conditions sampled at the midpoint of a path. Adjudication only."""
+    return ocean_model(state).at((first["x"] + second["x"]) / 2.0,
+                                 (first["y"] + second["y"]) / 2.0, state["t"])
+
+
+def estimated_environment(state, east_nm, north_nm):
+    """What the boat believes, from its last profile and the chart.
+
+    Charted depth, bottom class and observed sea state are known. Only the sound
+    speed structure comes from the estimate, and it does not age itself: the
+    estimate is a fixed profile while the true field moves away from it.
+    """
+    estimate = state["profile_estimate"]
+    ocean = state["ocean"]
+    depth_m = ocean_model(state).bathymetry.depth_m(east_nm, north_nm)
+    profile = acoustics.layered_profile(
+        estimate["surface_speed_mps"], estimate["layer_depth_m"],
+        estimate["duct_gradient"], estimate["thermocline_gradient"],
+        estimate["deep_gradient"], estimate["thermocline_thickness_m"], depth_m)
+    return acoustics.Environment(profile, depth_m, ocean["bottom"],
+                                 ocean["sea_state"], ocean["shipping_density"])
+
+
+def self_noise_levels(entity, receiver, penalty_db=0.0):
+    """Self noise at the array, by band, for this speed and equipment state."""
+    rise = acoustics.flow_noise_rise_db(entity["speed"], receiver.quiet_speed_knots)
+    return tuple(acoustics.quantise(level + rise + penalty_db)
+                 for level in receiver.self_noise_db)
+
+
+def acoustic_ledger(state, listener, source, *, fluctuation_db=0.0, gain_offset_db=0.0,
+                    noise_penalty_db=0.0, active=False):
+    """Resolve one listener/source pair through the sonar equation.
+
+    Returns the per-band decibel ledger and the band with the greatest signal
+    excess, or None when the listener has no receiver or no path carries energy.
+    This is the only place in the game where a detection opportunity is scored;
+    own ship, the opposition and the active pulse all come through here.
+    """
+    receiver = entity_spec(listener).receiver
+    if receiver is None:
+        return None
+    environment = true_environment(state, listener, source)
+    range_nm = distance(listener, source)
+    range_m = acoustics.nautical_miles_to_metres(range_nm)
+    listener_depth_m = acoustics.feet_to_metres(listener["depth"])
+    source_depth_m = acoustics.feet_to_metres(source["depth"])
+    self_noise = self_noise_levels(listener, receiver, noise_penalty_db)
+    if active:
+        bands = (acoustics.ACTIVE_BAND,)
+        indices = (acoustics.BAND_IDS.index(acoustics.ACTIVE_BAND.identifier),)
+        levels = (ACTIVE_SOURCE_LEVEL_DB,)
+        target_strength = entity_spec(source).target_strength_db
+    else:
+        bands = acoustics.BANDS
+        indices = tuple(range(len(acoustics.BANDS)))
+        levels = source_levels(source)
+        target_strength = None
+    entries = []
+    for band, index in zip(bands, indices):
+        solution = acoustics.transmission_loss(
+            environment, band.centre_hz, range_m, listener_depth_m, source_depth_m)
+        if solution.loss_db is None:
+            # Same shape as a scored band, so a caller can read any entry
+            # without having to know which branch produced it.
+            entries.append({"band": band.identifier, "signal_excess_db": None,
+                            "transmission_loss_db": None, "noise_level_db": None,
+                            "source_level_db": None, "array_gain_db": None,
+                            "detection_threshold_db": None,
+                            "path": None, "path_status": "out_of_scope"})
+            continue
+        loss = acoustics.quantise(solution.loss_db + fluctuation_db)
+        noise = acoustics.combine_db(
+            acoustics.ambient_noise_db(environment, band, listener_depth_m),
+            self_noise[index])
+        gain = receiver.array_gain_db[index] + gain_offset_db
+        threshold = acoustics.detection_threshold_db(
+            band, INTEGRATION_SECONDS, receiver.detection_index_db)
+        excess = acoustics.signal_excess_db(
+            levels[0] if active else levels[index], loss, noise, gain, threshold,
+            target_strength)
+        entries.append({"band": band.identifier, "signal_excess_db": excess,
+                        "transmission_loss_db": loss, "noise_level_db": noise,
+                        "source_level_db": levels[0] if active else levels[index],
+                        "array_gain_db": acoustics.quantise(gain),
+                        "detection_threshold_db": threshold,
+                        "path": solution.dominant, "path_status": solution.status})
+    scored = [entry for entry in entries if entry["signal_excess_db"] is not None]
+    if not scored:
+        return None
+    best = max(scored, key=lambda entry: entry["signal_excess_db"])
+    return {"range_nm": acoustics.quantise(range_nm, 3), "best": best, "bands": entries,
+            "probability": acoustics.detection_probability(best["signal_excess_db"]),
+            "water_depth_feet": round(acoustics.metres_to_feet(environment.water_depth_m)),
+            "layer_depth_feet": round(acoustics.metres_to_feet(environment.profile.layer_depth_m), 1)}
 
 
 def make_entity(spec, **state):
@@ -258,22 +399,29 @@ def assessments(track):
 
 def observe_contact(state, actor, dice, mode="passive", opening=False):
     own, t = state["own"], state["t"]
-    delta = distance(own, actor)
     window = t // 20
-    quality = dice.between(f"acoustic-window:{window}", 0.55, 1.15)
-    across = (own["depth"] > state["layer"]) != (actor["depth"] > state["layer"])
-    noise = max(0.24, 1 - max(0, own["speed"] - 5) * 0.055)
-    if state["pump_fault"]:
-        noise *= 0.68
+    # One environmental fluctuation per acoustic window, shared by every contact
+    # in it: reports made in the same conditions carry a common error, so two of
+    # them are not two independent measurements.
+    fluctuation = dice.between(f"acoustic-window:{window}", -ENVIRONMENT_FLUCTUATION_DB,
+                               ENVIRONMENT_FLUCTUATION_DB)
+    gain_offset = 0.0
     if mode == "focus":
         track_match = next((tr for tr in state["tracks"] if tr["actor"] == actor["id"]), None)
-        noise *= 1.25 if track_match and track_match["id"] == state["focus"] else 0.78
-    audibility = entity_noise(actor) * quality * noise * (0.55 if across else 1)
-    probability = min(0.97, max(0.015, audibility * math.exp(-delta / 8)))
-    if mode == "active":
-        probability = min(0.97, 1.35 * math.exp(-delta / 17))
+        focused = track_match is not None and track_match["id"] == state["focus"]
+        gain_offset = FOCUS_GAIN_DB if focused else UNFOCUSED_PENALTY_DB
+    ledger = acoustic_ledger(
+        state, own, actor, fluctuation_db=fluctuation, gain_offset_db=gain_offset,
+        noise_penalty_db=PUMP_FAULT_SELF_NOISE_DB if state["pump_fault"] else 0.0,
+        active=mode == "active")
+    if ledger is None:
+        return
+    probability = ledger["probability"]
     if not opening and dice.u(f"detect:{actor['id']}:{t}:{mode}") >= probability:
         return
+    delta = ledger["range_nm"]
+    excess = ledger["best"]["signal_excess_db"]
+    band = acoustics.BAND_BY_ID[ledger["best"]["band"]]
     track = next((tr for tr in state["tracks"] if tr["actor"] == actor["id"]), None)
     new = track is None
     if new:
@@ -286,23 +434,140 @@ def observe_contact(state, actor, dice, mode="passive", opening=False):
     if opening:
         cue = "opening"
     else:
+        # A cue can only be reported from a part of the spectrum that arrived.
+        available = [key for key in CUES if band.identifier in CUE_BANDS[key]] or list(CUES)
         i = KINDS.index(contact_kind(actor))
-        cue = dice.choose(f"signature:{actor['id']}:{window}", list(CUES), [CUES[key][i] for key in CUES])
+        cue = dice.choose(f"signature:{actor['id']}:{window}", available,
+                          [CUES[key][i] for key in available])
         # One evidence contribution per acoustic window; repeated looks do not compound confidence.
         track["evidence"].setdefault(str(window), cue)
-    strength = "strong" if audibility / max(delta, 1) > 0.25 else "moderate" if audibility / max(delta, 1) > 0.10 else "weak"
+    strength = "strong" if excess >= 10 else "moderate" if excess >= 3 else "weak"
     obs = {"time": clock(t), "elapsed_minutes": t, "bearing_true": round(measured) % 360,
            "own_east_nm": round(own["x"], 3), "own_north_nm": round(own["y"], 3),
+           "own_depth_feet": own["depth"],
            "source": mode, "strength": strength, "description": CUE_TEXT[cue],
+           "band": band.identifier, "band_label": band.label,
            "range_estimate_nm": None, "evidence_window": f"A{window:03d}"}
     if mode == "active":
         obs["range_estimate_nm"] = round(max(0.1, delta * dice.between(f"active-range:{actor['id']}:{t}", 0.88, 1.12)), 1)
     track["observations"].append(obs)
-    report(state, "Sonar", f"{track['id']}: bearing {obs['bearing_true']:03d} true, {strength} reception. {obs['description']}",
+    # The decibel ledger is world truth. It is kept for the debrief and never
+    # reaches a public report.
+    state["acoustic_ledger"].append({"elapsed_minutes": t, "contact": track["id"],
+                                     "actor": actor["id"], "mode": mode, **ledger})
+    report(state, "Sonar",
+           f"{track['id']}: bearing {obs['bearing_true']:03d} true, {strength} reception in the "
+           f"{band.label} band. {obs['description']}",
            "new_contact" if new else "contact_update", contact=track["id"], observation=obs)
     new_assessment = assessments(track)["supervisor"]
     if not new and new_assessment["confidence"] == "high" and new_assessment != old_assessment:
         report(state, "Sonar supervisor", f"{track['id']}: assessment now favors {new_assessment['favors']} with high confidence; this remains an assessment.", "classification_change", contact=track["id"])
+
+
+def band_entry(ledger, band_identifier):
+    """One band's row of a ledger, found by name rather than by position."""
+    return next(entry for entry in ledger["bands"] if entry["band"] == band_identifier)
+
+
+def take_sound_profile(state, dice):
+    """Replace the onboard profile estimate by sampling the true water column.
+
+    A measurement, not a revelation: the layer depth is read with a residual
+    error, and the estimate is then fixed while the true field keeps moving.
+    """
+    own, t = state["own"], state["t"]
+    model = ocean_model(state)
+    truth = model.at(own["x"], own["y"], t)
+    error_m = dice.between(f"profile-error:{t}", -4.5, 4.5)
+    estimate = state["profile_estimate"]
+    estimate.update({
+        "layer_depth_m": acoustics.quantise(max(5.0, truth.profile.layer_depth_m + error_m), 2),
+        "uncertainty_m": acoustics.quantise(5.0, 2),
+        "surface_speed_mps": state["ocean"]["surface_speed_mps"],
+        "duct_gradient": state["ocean"]["duct_gradient"],
+        "thermocline_gradient": state["ocean"]["thermocline_gradient"],
+        "deep_gradient": state["ocean"]["deep_gradient"],
+        "thermocline_thickness_m": state["ocean"]["thermocline_thickness_m"],
+        "taken_minutes": t, "taken_east_nm": round(own["x"], 3),
+        "taken_north_nm": round(own["y"], 3),
+        "source": "onboard sound-speed profile observation",
+    })
+    layer_feet = acoustics.metres_to_feet(estimate["layer_depth_m"])
+    cutoff = acoustics.layered_profile(
+        estimate["surface_speed_mps"], estimate["layer_depth_m"], estimate["duct_gradient"],
+        estimate["thermocline_gradient"], estimate["deep_gradient"],
+        estimate["thermocline_thickness_m"], truth.water_depth_m).duct_cutoff_hz
+    report(state, "Environment",
+           f"Sound-speed observation complete. Layer depth measured at {layer_feet:.0f} feet "
+           f"plus or minus {acoustics.metres_to_feet(estimate['uncertainty_m']):.0f}; "
+           f"surface duct traps above about {cutoff:.0f} Hz. The estimate applies to this position "
+           "and time and will age.",
+           "profile_complete")
+
+
+# Charted depth in metres across the operating area, on a coarse grid. The
+# passage is deep in the south-west and shoals toward the north-east; every
+# charted square still clears the game's depth envelope.
+PASSAGE_BATHYMETRY = {
+    "origin_east_nm": -4.0, "origin_north_nm": -14.0, "spacing_nm": 8.0,
+    "depths_m": [
+        [2600, 2600, 2500, 2300, 2000, 1800],
+        [2600, 2550, 2450, 2200, 1900, 1600],
+        [2500, 2450, 2350, 2050, 1700, 1300],
+        [2300, 2200, 2000, 1700, 1300, 950],
+        [2000, 1900, 1700, 1400, 1000, 700],
+    ],
+}
+
+
+def initial_ocean(dice):
+    """Draw the scenario's true conditions once, at initialization.
+
+    Nothing about the ocean is redrawn during play. The layer deepens eastward
+    and breathes slowly, so an estimate goes stale by the boat's own movement as
+    much as by the clock.
+    """
+    return {
+        "bathymetry": PASSAGE_BATHYMETRY,
+        "bottom": "fine_sediment",
+        "sea_state": int(dice.choose("initial:sea-state", [2, 3, 4], [0.3, 0.45, 0.25])),
+        "shipping_density": 4,
+        "surface_speed_mps": acoustics.quantise(dice.between("initial:surface-speed", 1495, 1505), 2),
+        "layer_depth_west_m": acoustics.quantise(
+            acoustics.feet_to_metres(dice.between("initial:layer-west", 330, 385)), 2),
+        "layer_depth_east_m": acoustics.quantise(
+            acoustics.feet_to_metres(dice.between("initial:layer-east", 450, 525)), 2),
+        "layer_variation_m": acoustics.quantise(
+            acoustics.feet_to_metres(dice.between("initial:layer-variation", 8, 20)), 2),
+        "layer_period_minutes": 480.0,
+        "west_east_span_nm": 24.0,
+        "duct_gradient": 0.016,
+        "thermocline_gradient": acoustics.quantise(dice.between("initial:thermocline", -0.095, -0.062), 4),
+        "deep_gradient": 0.016,
+        "thermocline_thickness_m": 710.0,
+    }
+
+
+def initial_profile_estimate(state, dice):
+    """The pre-patrol forecast: the right shape, the wrong layer depth.
+
+    It is deliberately worse than an observation, and it carries where and when
+    it was made so its age is visible rather than implied.
+    """
+    ocean = state["ocean"]
+    nominal = (ocean["layer_depth_west_m"] + ocean["layer_depth_east_m"]) / 2.0
+    error = acoustics.feet_to_metres(dice.between("initial:profile-error", -55, 55))
+    return {
+        "layer_depth_m": acoustics.quantise(max(5.0, nominal + error), 2),
+        "uncertainty_m": acoustics.quantise(acoustics.feet_to_metres(60.0), 2),
+        "surface_speed_mps": ocean["surface_speed_mps"],
+        "duct_gradient": ocean["duct_gradient"],
+        "thermocline_gradient": ocean["thermocline_gradient"],
+        "deep_gradient": ocean["deep_gradient"],
+        "thermocline_thickness_m": ocean["thermocline_thickness_m"],
+        "taken_minutes": 0, "taken_east_nm": 0.0, "taken_north_nm": 0.0,
+        "source": "pre-patrol forecast, not an onboard observation",
+    }
 
 
 def new_world(seed):
@@ -311,9 +576,11 @@ def new_world(seed):
                                 course=90.0, speed=5.0, depth=400.0),
              "actors": [], "tracks": [], "reports": [], "rng_trace": [], "focus": None,
              "pump_fault": False, "repair_progress": 0, "received": [], "sent": [],
+             "acoustic_ledger": [],
              "ended": False, "end_reason": None, "deadline_announced": False, "last_action_report_start": 0}
     dice = Dice(seed, state["rng_trace"])
-    state["layer"] = dice.between("initial:layer", 260, 350)
+    state["ocean"] = initial_ocean(dice)
+    state["profile_estimate"] = initial_profile_estimate(state, dice)
     state["bearing_bias"] = dice.between("initial:bearing-bias", -2, 2)
     state["equipment_susceptibility"] = dice.between("initial:equipment", 0.4, 1.6)
     state["radio_reliability"] = dice.between("initial:radio", 0.58, 0.94)
@@ -390,7 +657,13 @@ def new_world(seed):
         {"id": "OPS-0510", "available": 120, "text": "0510 operations update: assessment deadline 0730 and relief station time 0800 remain unchanged. Commercial schedules are incomplete; absence from the list does not establish military identity."},
     ]
     report(state, "Navigation", "0310. Local position (0 east, 0 north). Course 090, speed 5 knots, depth 400 feet. RELIEF lies 24 nautical miles east.")
-    report(state, "Environment", "Last onboard profile places the principal acoustic layer somewhere between 250 and 375 feet. Conditions are variable.")
+    estimate = state["profile_estimate"]
+    report(state, "Environment",
+           f"Pre-patrol forecast places the acoustic layer near "
+           f"{acoustics.metres_to_feet(estimate['layer_depth_m']):.0f} feet, plus or minus "
+           f"{acoustics.metres_to_feet(estimate['uncertainty_m']):.0f}. It is a forecast, not an "
+           "observation, and the layer is known to deepen eastward through the passage. A sound-speed "
+           "observation will replace it with a measurement at one position and time.")
     report(state, "Engineering", "Propulsion, sonar, communications and the auxiliary plant are available.")
     observe_contact(state, primary, dice, opening=True)
     return state
@@ -413,10 +686,23 @@ def opponent_step(state, actor, dice, active):
     ):
         return
     own, t = state["own"], state["t"]
-    gap = distance(own, actor)
-    probability = min(0.70, (0.04 + max(0, own["speed"] - 4) * 0.025) * math.exp(-gap / 10))
-    if active:
-        probability = min(0.98, 1.5 * math.exp(-gap / 20))
+    # The opposition hears own ship through the same environment and the same
+    # sonar equation, using its own receiver and own-ship's radiated levels.
+    window = t // 20
+    fluctuation = dice.between(f"acoustic-window:{window}", -ENVIRONMENT_FLUCTUATION_DB,
+                               ENVIRONMENT_FLUCTUATION_DB)
+    ledger = acoustic_ledger(state, actor, own, fluctuation_db=fluctuation)
+    probability = ledger["probability"] if ledger else 0.0
+    if active and ledger is not None:
+        # An active transmission is loud and deliberate. The pulse reaches the
+        # opposition one way, at the projector's source level, in its own band.
+        entry = band_entry(ledger, acoustics.ACTIVE_BAND.identifier)
+        if entry["transmission_loss_db"] is not None:
+            excess = acoustics.signal_excess_db(
+                ACTIVE_SOURCE_LEVEL_DB, entry["transmission_loss_db"],
+                entry["noise_level_db"], entry["array_gain_db"],
+                entry["detection_threshold_db"])
+            probability = max(probability, acoustics.detection_probability(excess))
     if dice.u(f"opponent-hears:{actor['id']}:{t}") < probability:
         actor["aware"] = True
         actor["last_heard"] = {"x": own["x"] + dice.between(f"opponent-fix-x:{t}", -2, 2),
@@ -479,6 +765,8 @@ def tick_world(state, dice, order, first_tick):
     for tr in state["tracks"]:
         if t - tr["last"] == 20:
             report(state, "Sonar", f"{tr['id']}: no further observation for 20 minutes. Last report is now stale; contact fate unknown.", "contact_lost", contact=tr["id"])
+    if order["activity"] == "sound_profile" and first_tick:
+        take_sound_profile(state, dice)
     if order["activity"] == "mast":
         mast_observations(state, dice)
     if order["activity"] in ("receive", "transmit"):
@@ -529,7 +817,7 @@ def validate_order(raw, state):
     order = copy.deepcopy(raw)
     order.setdefault("activity", "listen")
     activity = order["activity"]
-    if activity not in ("listen", "focus", "active", "mast", "receive", "transmit", "repair", "end"):
+    if activity not in ("listen", "focus", "active", "mast", "receive", "transmit", "repair", "sound_profile", "end"):
         raise ValueError("Unsupported activity. No time has elapsed; agree on an applicable rule before proceeding.")
     order.setdefault("minutes", 0 if activity == "end" else 15)
     minutes = order["minutes"]
@@ -568,6 +856,15 @@ def validate_order(raw, state):
         if spec.repair_maximum_speed_knots is None:
             raise ValueError("This platform has no implemented repair activity.")
         raise ValueError(f"Repair requires {spec.repair_maximum_speed_knots:g} knots or less in the game.")
+    if activity == "sound_profile" and (
+        spec.profile_maximum_speed_knots is None
+        or order["speed"] > spec.profile_maximum_speed_knots
+    ):
+        if spec.profile_maximum_speed_knots is None:
+            raise ValueError("This platform has no implemented sound-speed observation.")
+        raise ValueError(
+            f"A sound-speed observation requires {spec.profile_maximum_speed_knots:g} knots or less."
+        )
     if activity == "focus" and order.get("focus") not in [tr["id"] for tr in state["tracks"]]:
         raise ValueError("Focused analysis requires an existing contact id.")
     if "focus" in order and activity != "focus":
@@ -618,7 +915,8 @@ def simulate(state, seed, order):
             stop_events = _execution_events(new_reports, {"exercise_end"} | matched)
             break
         completed = categories.intersection(
-            {"transmission_complete", "message_received", "radio_empty", "repair_complete"}
+            {"transmission_complete", "message_received", "radio_empty", "repair_complete",
+             "profile_complete"}
         )
         if completed:
             stop = "task_complete"
@@ -659,6 +957,130 @@ def capability_report():
             "observations identify them."
         ),
     }
+    result["acoustic_model"] = {
+        "reference_levels": {
+            "source_level": "dB re 1 micropascal at 1 m, in a band's analysis bandwidth",
+            "noise_level": "dB re 1 micropascal, in the same analysis bandwidth",
+            "transmission_loss": "dB relative to 1 m",
+            "array_gain": "dB", "target_strength": "dB",
+        },
+        "passive_equation": "SE = SL - TL - (NL - DI) - DT",
+        "active_equation": "SE = SL - 2*TL + TS - (NL - DI) - DT",
+        "bands": acoustics.public_band_catalogue(),
+        "integration_seconds_per_step": INTEGRATION_SECONDS,
+        "detection_probability": (
+            f"Cumulative normal in signal excess, {acoustics.SIGNAL_EXCESS_SIGMA_DB:g} dB spread, "
+            f"bounded to [{acoustics.MINIMUM_DETECTION_PROBABILITY}, "
+            f"{acoustics.MAXIMUM_DETECTION_PROBABILITY}]."
+        ),
+        "shared_environment": (
+            "Own-ship reception, the opposition's reception of own ship and the active pulse are "
+            "resolved by the same function against the same environment."
+        ),
+        "environment_estimate": (
+            "Adjudication uses true conditions. Everything published to the captain is predicted "
+            "from the onboard profile estimate, whose age, origin and uncertainty are reported."
+        ),
+        "bottom_classes": {name: value["description"] for name, value in acoustics.BOTTOM_TYPES.items()},
+        "correlated_error": (
+            "One environmental fluctuation per twenty-minute acoustic window applies to every "
+            "contact in it; repeated looks in one window are not independent evidence."
+        ),
+        "not_modelled": [
+            "ray or normal-mode solution of the profile",
+            "range-dependent conditions within a single path",
+            "narrowband line structure and measured frequencies",
+            "separate arrays, beam patterns and baffles",
+            "reverberation, surface scattering and internal waves",
+        ],
+    }
+    return result
+
+
+def public_report(entry):
+    """Strip a world report down to the fields the captain may see."""
+    return {key: copy.deepcopy(value) for key, value in entry.items()
+            if key in PUBLIC_REPORT_FIELDS}
+
+
+def acoustic_prediction(state):
+    """Predicted propagation from the boat's own estimate, never from truth.
+
+    Charted depth, bottom class and sea state are known; the sound speed
+    structure is whatever the last profile said. Every number here is therefore
+    as wrong as the estimate is, which is the point of publishing its age and the
+    distance the boat has run since it was taken.
+    """
+    own, t = state["own"], state["t"]
+    estimate = state["profile_estimate"]
+    environment = estimated_environment(state, own["x"], own["y"])
+    profile = environment.profile
+    own_depth_m = acoustics.feet_to_metres(own["depth"])
+    reference_range_m = acoustics.nautical_miles_to_metres(PROFILE_PREDICTION_RANGE_NM)
+    band = acoustics.BAND_BY_ID["b300"]
+    reception = []
+    for source_feet in PROFILE_PREDICTION_DEPTHS_FEET:
+        source_m = acoustics.feet_to_metres(source_feet)
+        limit = acoustics.refracted_limiting_range_m(profile, own_depth_m, source_m)
+        solution = acoustics.transmission_loss(
+            environment, band.centre_hz, reference_range_m, own_depth_m, source_m)
+        reception.append({
+            "assumed_source_depth_feet": source_feet,
+            "shares_own_side_of_layer":
+                (own_depth_m <= profile.layer_depth_m) == (source_m <= profile.layer_depth_m),
+            "refracted_path_limit_nm": round(acoustics.metres_to_nautical_miles(limit), 2),
+            "paths": solution.public_definition()["paths"],
+        })
+    travelled = math.hypot(own["x"] - estimate["taken_east_nm"], own["y"] - estimate["taken_north_nm"])
+    return {
+        "basis": estimate["source"],
+        "taken_time": clock(estimate["taken_minutes"]),
+        "age_minutes": t - estimate["taken_minutes"],
+        "distance_from_observation_nm": round(travelled, 2),
+        "estimated_layer_depth_feet": round(acoustics.metres_to_feet(estimate["layer_depth_m"])),
+        "estimated_layer_uncertainty_feet": round(acoustics.metres_to_feet(estimate["uncertainty_m"])),
+        "charted_water_depth_feet": round(acoustics.metres_to_feet(environment.water_depth_m)),
+        "bottom": environment.bottom,
+        "bottom_description": acoustics.BOTTOM_TYPES[environment.bottom]["description"],
+        "sea_state": environment.sea_state,
+        "surface_duct": {
+            "present": profile.has_surface_duct,
+            "cutoff_hz": profile.duct_cutoff_hz,
+            "note": "A duct of the estimated thickness traps only frequencies above its cutoff.",
+        },
+        "prediction_geometry": {"range_nm": PROFILE_PREDICTION_RANGE_NM,
+                                "frequency_hz": band.centre_hz,
+                                "own_depth_feet": own["depth"]},
+        "predicted_reception": reception,
+        "caveat": ("Predicted from the onboard estimate. Adjudication uses true conditions, which "
+                   "vary along the passage and with time; a stale or distant estimate will disagree."),
+    }
+
+
+def own_self_noise(state):
+    """Own radiated and received noise at the present speed and plant state."""
+    own = state["own"]
+    spec = entity_spec(own)
+    receiver = spec.receiver
+    levels = source_levels(own)
+    result = {
+        "radiated_source_level_db_by_band": dict(zip(acoustics.BAND_IDS, levels)),
+        "reference": "dB re 1 micropascal at 1 m in each band's analysis bandwidth; fictional game parameter.",
+    }
+    if receiver is not None:
+        penalty = PUMP_FAULT_SELF_NOISE_DB if state["pump_fault"] else 0.0
+        result["self_noise_db_by_band"] = dict(
+            zip(acoustics.BAND_IDS, self_noise_levels(own, receiver, penalty)))
+        result["flow_noise_rise_db"] = acoustics.flow_noise_rise_db(
+            own["speed"], receiver.quiet_speed_knots)
+        result["quiet_speed_knots"] = receiver.quiet_speed_knots
+    inception = spec.signature.cavitation_speed_knots(own["depth"])
+    if inception is not None:
+        result["cavitation_inception_speed_knots"] = inception
+        result["cavitating"] = own["speed"] > inception
+        result["cavitation_note"] = (
+            "Cavitation inception rises with depth. Above it, radiated noise steps up by "
+            f"{acoustics.CAVITATION_EXCESS_DB:g} dB in every band.")
     return result
 
 
@@ -693,25 +1115,24 @@ def public_view(game):
                              "rules_of_engagement": "No offensive weapons employment authorized.",
                              "employment_available": False,
                          },
+                         "acoustics": own_self_noise(state),
                          "equipment": "Auxiliary vibration; sonar self-noise elevated" if state["pump_fault"] else "All systems available",
                          "repair_minutes_completed": state["repair_progress"]},
             "navigation": {"relief_distance_nm": round(gap, 2), "relief_bearing_true": round(bearing(own, station)),
                            "minutes_to_relief": remaining,
                            "minimum_average_speed_to_station_knots": round(gap / (remaining / 60), 2) if remaining else None,
                            "minutes_to_assessment_deadline": max(0, REPORT_DUE - state["t"])},
+            "acoustic_environment": acoustic_prediction(state),
             "contacts": tracks, "transmitted_assessments": copy.deepcopy(state["sent"]),
-            "reports_this_turn": copy.deepcopy(state["reports"][state["last_action_report_start"]:]),
+            "reports_this_turn": [public_report(entry)
+                                  for entry in state["reports"][state["last_action_report_start"]:]],
             "report_count": len(state["reports"]),
             "last_execution": copy.deepcopy(game["events"][-1]["execution"]) if game["events"] else None}
 
 
 def public_history(game):
     """Return only captain-visible reports and previously submitted orders."""
-    reports = [
-        {key: copy.deepcopy(value) for key, value in entry.items()
-         if key in PUBLIC_REPORT_FIELDS}
-        for entry in game["state"]["reports"]
-    ]
+    reports = [public_report(entry) for entry in game["state"]["reports"]]
     return {"reports": reports,
             "orders": [copy.deepcopy(event["raw"]) for event in game["events"]]}
 
@@ -800,6 +1221,12 @@ def debrief(game):
                             "interpretation": "Outcome accuracy only; evaluate the judgment against the cited evidence separately."})
     return {"spoilers": True, "verification": verification, "seed": game["seed"],
             "initial_state": game["initial_state"], "final_state": state, "events": game["events"],
+            "acoustic_ledger": copy.deepcopy(state["acoustic_ledger"]),
+            "acoustic_ledger_note": (
+                "Every detection opportunity that produced a report, in decibels: source level, "
+                "transmission loss and the path that carried it, noise, array gain, threshold and "
+                "the resulting signal excess. Compare it against what the boat predicted from its "
+                "profile estimate at the time."),
             "outcomes": {"assessment_sent_by_deadline": bool(timely),
                          "at_relief_at_0800": distance(state["own"], {"x": 24, "y": 0}) <= 3 if state["t"] == END else None,
                          "opponent_detected_own_ship": any(a["aware"] for a in state["actors"]),
