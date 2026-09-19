@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from submarine_command import engine as e
+from submarine_command.platforms import BIOLOGIC, DART, ENTITY_REGISTRY
 
 
 class EngineTests(unittest.TestCase):
@@ -37,7 +38,7 @@ class EngineTests(unittest.TestCase):
             view = e.apply_order(self.game, self.order(id=f"p{i}", minutes=15))
             def scan(obj):
                 if isinstance(obj, dict):
-                    self.assertFalse(set(obj) & {"seed", "actors", "actor", "kind", "rng_trace", "initial_state", "intent", "last_heard", "aware", "bearing_bias", "bulletins", "radio_reliability"})
+                    self.assertFalse(set(obj) & {"seed", "actors", "actor", "kind", "spec", "rng_trace", "initial_state", "intent", "last_heard", "aware", "bearing_bias", "bulletins", "radio_reliability"})
                     for value in obj.values():
                         scan(value)
                 elif isinstance(obj, list):
@@ -83,12 +84,11 @@ class EngineTests(unittest.TestCase):
         state["t"] = 5
         dice = e.Dice(self.game["seed"], state["rng_trace"])
         primary = state["actors"][0]
-        for minute in (5, 10, 15):
-            state["t"] = minute
-            # Increase audibility only in this throwaway world to get observations.
-            primary["noise"] = 1000
-            for _ in range(2):
-                e.observe_contact(state, primary, dice)
+        with mock.patch.object(e, "entity_noise", return_value=1000):
+            for minute in (5, 10, 15):
+                state["t"] = minute
+                for _ in range(2):
+                    e.observe_contact(state, primary, dice)
         track = state["tracks"][0]
         self.assertLessEqual(len(track["evidence"]), 1)
         self.assertTrue(all(0 <= ob["bearing_true"] < 360 for ob in track["observations"]))
@@ -204,11 +204,18 @@ class EngineTests(unittest.TestCase):
 
     def test_unaware_opponent_does_not_react_to_true_position(self):
         state = copy.deepcopy(self.game["state"])
-        actor = state["actors"][0]
-        actor["kind"] = "submerged"
-        actor["aware"] = False
-        actor["last_heard"] = None
-        actor["evaded"] = False
+        actor = e.make_entity(
+            DART,
+            id="test-diesel",
+            x=5,
+            y=0,
+            course=90,
+            speed=5,
+            depth=300,
+            aware=False,
+            last_heard=None,
+            evaded=False,
+        )
         before = (actor["course"], actor["speed"])
         class NoDetection:
             def u(self, label):
@@ -216,6 +223,89 @@ class EngineTests(unittest.TestCase):
         e.opponent_step(state, actor, NoDetection(), False)
         self.assertEqual(before, (actor["course"], actor["speed"]))
         self.assertFalse(actor["aware"])
+
+    def test_every_world_actor_uses_registered_components_and_valid_geometry(self):
+        state = self.game["state"]
+        for entity in [state["own"], *state["actors"]]:
+            self.assertIn(entity["spec"], ENTITY_REGISTRY)
+            spec = e.entity_spec(entity)
+            self.assertTrue(spec.envelope.allows(entity["speed"], entity["depth"]))
+            self.assertIn(entity["operating_mode"], {
+                mode.identifier for mode in spec.modes
+            })
+            self.assertEqual(
+                set(entity["resources"]),
+                {resource.identifier for resource in spec.resources},
+            )
+
+    def test_diesel_energy_consumes_submerged_and_recharges_while_snorkeling(self):
+        actor = e.make_entity(
+            DART,
+            id="energy-test",
+            x=0,
+            y=0,
+            course=0,
+            speed=4,
+            depth=300,
+        )
+        initial = actor["resources"]["battery_energy"]
+        e.advance_entity_components(actor)
+        submerged = actor["resources"]["battery_energy"]
+        self.assertLess(submerged, initial)
+        actor["operating_mode"] = "snorkeling"
+        actor["depth"] = 50
+        e.advance_entity_components(actor)
+        self.assertGreater(actor["resources"]["battery_energy"], submerged)
+
+    def test_low_energy_diesel_snorkels_before_shared_movement(self):
+        state = copy.deepcopy(self.game["state"])
+        actor = e.make_entity(
+            DART,
+            id="low-energy",
+            x=0,
+            y=0,
+            course=0,
+            speed=9,
+            depth=400,
+        )
+        actor["resources"]["battery_energy"] = 20
+        state["t"] = 20
+        e.prepare_actor_step(state, actor, e.Dice(self.game["seed"], []))
+        self.assertEqual(actor["operating_mode"], "snorkeling")
+        self.assertEqual(actor["depth"], 50)
+        self.assertLessEqual(actor["speed"], 7)
+
+    def test_biologic_behavior_is_replayable_and_uses_entity_modes(self):
+        base = e.make_entity(
+            BIOLOGIC,
+            id="bio-test",
+            x=0,
+            y=0,
+            course=90,
+            speed=3,
+            depth=300,
+        )
+        state = copy.deepcopy(self.game["state"])
+        state["t"] = 20
+        first = copy.deepcopy(base)
+        second = copy.deepcopy(base)
+        e.prepare_actor_step(state, first, e.Dice("19" * 32, []))
+        e.prepare_actor_step(state, second, e.Dice("19" * 32, []))
+        self.assertEqual(first, second)
+        self.assertTrue(
+            BIOLOGIC.mode(first["operating_mode"]).allows(
+                first["speed"], first["depth"]
+            )
+        )
+
+    def test_mode_envelope_rejection_is_atomic(self):
+        before = e.canonical(self.game)
+        with self.assertRaises(ValueError):
+            e.apply_order(
+                self.game,
+                self.order(operating_mode="quiet", speed=12),
+            )
+        self.assertEqual(before, e.canonical(self.game))
 
     def test_cli_resume_and_no_reinitialization(self):
         with tempfile.TemporaryDirectory() as temp:

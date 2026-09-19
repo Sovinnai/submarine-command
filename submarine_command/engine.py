@@ -18,9 +18,19 @@ import tempfile
 
 from .locking import session_lock
 from .observations import observed_bearing_drift
-from .platforms import KESTREL
+from .platforms import (
+    BIOLOGIC,
+    DART,
+    FISHER,
+    KESTREL,
+    MERCHANT,
+    WARSHIP,
+    EntityCategory,
+    get_spec,
+    public_entity_catalog,
+)
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 TICK = 5
 END = 290
 REPORT_DUE = 260
@@ -132,6 +142,94 @@ def move(obj):
     obj["y"] += math.cos(angle) * obj["speed"] * TICK / 60
 
 
+def entity_spec(entity):
+    return get_spec(entity["spec"])
+
+
+def contact_kind(entity):
+    return entity_spec(entity).contact_domain.value
+
+
+def entity_noise(entity):
+    return entity_spec(entity).mode(entity["operating_mode"]).relative_noise
+
+
+def make_entity(spec, **state):
+    entity = {"spec": spec.identifier, **spec.initial_components(), **state}
+    if not spec.envelope.allows(entity["speed"], entity["depth"]):
+        raise ValueError(f"Initial state is outside the {spec.class_name} envelope.")
+    if not spec.mode(entity["operating_mode"]).allows(
+        entity["speed"], entity["depth"]
+    ):
+        raise ValueError(f"Initial state is outside the selected operating mode.")
+    return entity
+
+
+def advance_entity_components(entity):
+    """Advance consumable resources over one shared integration step."""
+    spec = entity_spec(entity)
+    for model in spec.resources:
+        amount = entity["resources"][model.identifier]
+        drain = (
+            model.hotel_rate_per_hour
+            + model.speed_squared_rate_per_hour * entity["speed"] ** 2
+        ) * TICK / 60
+        recharge = dict(model.replenishment).get(entity["operating_mode"], 0)
+        amount += recharge * TICK / 60 - drain
+        entity["resources"][model.identifier] = round(
+            min(model.capacity, max(0, amount)), 6
+        )
+
+
+def prepare_actor_step(state, actor, dice):
+    """Apply bounded actor behavior without access to the player's hidden truth."""
+    spec = entity_spec(actor)
+    t = state["t"]
+    if spec.category == EntityCategory.DIESEL_SUBMARINE:
+        energy = actor["resources"]["battery_energy"]
+        if energy <= 24 and actor["operating_mode"] != "snorkeling":
+            actor["operating_mode"] = "snorkeling"
+            actor["depth"] = 50
+            actor["speed"] = min(actor["speed"], 7)
+        elif energy >= 82 and actor["operating_mode"] == "snorkeling":
+            actor["operating_mode"] = "battery"
+            actor["depth"] = 250
+    elif spec.category == EntityCategory.BIOLOGIC and t % 20 == 0:
+        actor["operating_mode"] = dice.choose(
+            f"biologic-mode:{actor['id']}:{t // 20}",
+            [mode.identifier for mode in spec.modes],
+            [0.35, 0.40, 0.25],
+        )
+        actor["course"] = (
+            actor["course"]
+            + dice.between(f"biologic-course:{actor['id']}:{t // 20}", -35, 35)
+        ) % 360
+        actor["speed"] = dice.between(
+            f"biologic-speed:{actor['id']}:{t // 20}",
+            spec.envelope.minimum_speed_knots,
+            spec.mode(actor["operating_mode"]).maximum_speed_knots,
+        )
+        actor["depth"] = dice.between(
+            f"biologic-depth:{actor['id']}:{t // 20}", 80, 900
+        )
+    elif spec.category == EntityCategory.FISHING_VESSEL and t % 40 == 0:
+        actor["operating_mode"] = dice.choose(
+            f"fishing-mode:{actor['id']}:{t // 40}",
+            ["transit", "fishing"],
+            [0.45, 0.55],
+        )
+        if actor["operating_mode"] == "fishing":
+            actor["speed"] = dice.between(
+                f"fishing-speed:{actor['id']}:{t // 40}", 1, 4
+            )
+            actor["course"] = (
+                actor["course"]
+                + dice.between(
+                    f"fishing-course:{actor['id']}:{t // 40}", -70, 70
+                )
+            ) % 360
+
+
 def report(state, department, text, category="routine", **extra):
     entry = {"id": f"R{len(state['reports']) + 1:04d}", "time": clock(state["t"]),
              "elapsed_minutes": state["t"], "department": department,
@@ -170,7 +268,7 @@ def observe_contact(state, actor, dice, mode="passive", opening=False):
     if mode == "focus":
         track_match = next((tr for tr in state["tracks"] if tr["actor"] == actor["id"]), None)
         noise *= 1.25 if track_match and track_match["id"] == state["focus"] else 0.78
-    audibility = actor["noise"] * quality * noise * (0.55 if across else 1)
+    audibility = entity_noise(actor) * quality * noise * (0.55 if across else 1)
     probability = min(0.97, max(0.015, audibility * math.exp(-delta / 8)))
     if mode == "active":
         probability = min(0.97, 1.35 * math.exp(-delta / 17))
@@ -188,7 +286,7 @@ def observe_contact(state, actor, dice, mode="passive", opening=False):
     if opening:
         cue = "opening"
     else:
-        i = KINDS.index(actor["kind"])
+        i = KINDS.index(contact_kind(actor))
         cue = dice.choose(f"signature:{actor['id']}:{window}", list(CUES), [CUES[key][i] for key in CUES])
         # One evidence contribution per acoustic window; repeated looks do not compound confidence.
         track["evidence"].setdefault(str(window), cue)
@@ -209,7 +307,8 @@ def observe_contact(state, actor, dice, mode="passive", opening=False):
 
 def new_world(seed):
     state = {"t": 0, "platform": KESTREL.identifier,
-             "own": {"x": 0.0, "y": 0.0, "course": 90.0, "speed": 5.0, "depth": 400.0},
+             "own": make_entity(KESTREL, id="own-kestrel", x=0.0, y=0.0,
+                                course=90.0, speed=5.0, depth=400.0),
              "actors": [], "tracks": [], "reports": [], "rng_trace": [], "focus": None,
              "pump_fault": False, "repair_progress": 0, "received": [], "sent": [],
              "ended": False, "end_reason": None, "deadline_announced": False, "last_action_report_start": 0}
@@ -219,26 +318,68 @@ def new_world(seed):
     state["equipment_susceptibility"] = dice.between("initial:equipment", 0.4, 1.6)
     state["radio_reliability"] = dice.between("initial:radio", 0.58, 0.94)
     kind = dice.choose("initial:primary-kind", KINDS, [0.46, 0.44, 0.10])
-    primary = {"id": "actor-a", "kind": kind,
-               "x": dice.between("initial:a-x", 5.5, 10), "y": dice.between("initial:a-y", -2.2, 4),
-               "course": dice.between("initial:a-course", 70, 115),
-               "speed": dice.between("initial:a-speed", 3.5, 8.5),
-               "depth": dice.between("initial:a-depth", 200, 650) if kind == "submerged" else 0,
-               "noise": {"surface": 1.7, "submerged": 1.05, "biologic": 0.85}[kind],
-               "aware": False, "last_heard": None, "evaded": False,
-               "name": dice.choose("initial:a-name", ["Cormorant", "Morrow", "Solace"]),
-               "intent": "Transit east through the passage; avoid an observer if one is detected." if kind == "submerged" else "Continue the established eastbound passage."}
+    primary_spec = {
+        "surface": MERCHANT,
+        "submerged": DART,
+        "biologic": BIOLOGIC,
+    }[kind]
+    primary = make_entity(
+        primary_spec,
+        id="actor-a",
+        x=dice.between("initial:a-x", 5.5, 10),
+        y=dice.between("initial:a-y", -2.2, 4),
+        course=dice.between("initial:a-course", 70, 115),
+        speed=dice.between(
+            "initial:a-speed",
+            max(3.5, primary_spec.envelope.minimum_speed_knots),
+            min(8.5, primary_spec.mode(primary_spec.default_mode).maximum_speed_knots),
+        ),
+        depth=(
+            dice.between("initial:a-depth", 200, 650)
+            if kind == "submerged"
+            else dice.between("initial:a-depth", 80, 600)
+            if kind == "biologic"
+            else 0
+        ),
+        aware=False,
+        last_heard=None,
+        evaded=False,
+        name=dice.choose("initial:a-name", ["Cormorant", "Morrow", "Solace"]),
+        intent=(
+            "Transit east through the passage; avoid an observer if one is detected."
+            if kind == "submerged"
+            else "Continue the established passage."
+        ),
+    )
     state["actors"].append(primary)
     # Background traffic is fixed at initialization too; no adaptive reinforcements.
-    for i in range(2):
-        state["actors"].append({"id": f"actor-{i+2}", "kind": "surface",
-                                "x": dice.between(f"initial:b{i}-x", 15, 29),
-                                "y": dice.between(f"initial:b{i}-y", -11, 11),
-                                "course": dice.between(f"initial:b{i}-course", 230, 290),
-                                "speed": dice.between(f"initial:b{i}-speed", 7, 12),
-                                "depth": 0, "noise": 1.55, "aware": False, "last_heard": None,
-                                "evaded": False, "name": ["Larkspur", "Bracken"][i],
-                                "intent": "Maintain scheduled commercial passage westbound."})
+    backgrounds = (
+        (MERCHANT, "Larkspur"),
+        (FISHER, "Bracken"),
+        (WARSHIP, "Vigil"),
+    )
+    for i, (spec, name) in enumerate(backgrounds):
+        maximum = min(12, spec.mode(spec.default_mode).maximum_speed_knots)
+        state["actors"].append(
+            make_entity(
+                spec,
+                id=f"actor-{i + 2}",
+                x=dice.between(f"initial:b{i}-x", 15, 29),
+                y=dice.between(f"initial:b{i}-y", -11, 11),
+                course=dice.between(f"initial:b{i}-course", 230, 290),
+                speed=dice.between(
+                    f"initial:b{i}-speed",
+                    max(3, spec.envelope.minimum_speed_knots),
+                    maximum,
+                ),
+                depth=0,
+                aware=False,
+                last_heard=None,
+                evaded=False,
+                name=name,
+                intent="Maintain an established westbound passage.",
+            )
+        )
     shore_correct = dice.u("initial:shore-source") < 0.76
     shore_type = kind if shore_correct else dice.choose("initial:shore-error", [k for k in KINDS if k != kind])
     estimate = {"surface": "Coastal watch reports a possible surface vessel in the eastern approach.",
@@ -266,7 +407,10 @@ def initialize(seed=None):
 
 
 def opponent_step(state, actor, dice, active):
-    if actor["kind"] != "submerged":
+    if entity_spec(actor).category not in (
+        EntityCategory.SSN,
+        EntityCategory.DIESEL_SUBMARINE,
+    ):
         return
     own, t = state["own"], state["t"]
     gap = distance(own, actor)
@@ -286,7 +430,7 @@ def opponent_step(state, actor, dice, active):
 
 def mast_observations(state, dice):
     for actor in state["actors"]:
-        if actor["kind"] != "surface":
+        if contact_kind(actor) != "surface":
             continue
         gap = distance(state["own"], actor)
         chance = max(0, 0.92 - gap / 10)
@@ -320,10 +464,13 @@ def tick_world(state, dice, order, first_tick):
     # Decisions use the common start-of-step geometry. Movement is then
     # integrated for every platform over the same elapsed interval.
     for actor in state["actors"]:
+        prepare_actor_step(state, actor, dice)
         opponent_step(state, actor, dice, active)
     move(state["own"])
+    advance_entity_components(state["own"])
     for actor in state["actors"]:
         move(actor)
+        advance_entity_components(actor)
     if active:
         report(state, "Sonar", "One active acoustic transmission made.", "emission")
     mode = "active" if active else "focus" if order["activity"] == "focus" else "passive"
@@ -374,7 +521,7 @@ def tick_world(state, dice, order, first_tick):
 
 
 def validate_order(raw, state):
-    allowed = {"id", "minutes", "course", "speed", "depth", "activity", "focus", "assessment", "message", "basis", "interrupt_on", "expected_turn"}
+    allowed = {"id", "minutes", "course", "speed", "depth", "operating_mode", "activity", "focus", "assessment", "message", "basis", "interrupt_on", "expected_turn"}
     if not isinstance(raw, dict) or set(raw) - allowed:
         raise ValueError("Order must be an object using only the documented fields.")
     if not isinstance(raw.get("id"), str) or not 1 <= len(raw["id"]) <= 80:
@@ -392,17 +539,35 @@ def validate_order(raw, state):
         if set(raw) - {"id", "activity", "minutes", "expected_turn"}:
             raise ValueError("An end order cannot include other actions.")
         return order
-    envelope = KESTREL.envelope
+    spec = entity_spec(state["own"])
+    envelope = spec.envelope
     for field, low, high in (("course", 0, 359.999999),
                              ("speed", envelope.minimum_speed_knots, envelope.maximum_speed_knots),
                              ("depth", envelope.minimum_depth_feet, envelope.maximum_depth_feet)):
         value = order.setdefault(field, state["own"][field])
         if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:
             raise ValueError(f"{field} must be between {low} and {high} in the fictional game envelope.")
-    if activity in ("mast", "receive", "transmit") and not KESTREL.mast.allows(order["depth"], order["speed"]):
-        raise ValueError(f"Mast/link envelope: {KESTREL.mast.minimum_depth_feet:g} to {KESTREL.mast.maximum_depth_feet:g} feet and at most {KESTREL.mast.maximum_speed_knots:g} knots. Include those orders explicitly; no time has elapsed.")
-    if activity == "repair" and order["speed"] > KESTREL.repair_maximum_speed_knots:
-        raise ValueError(f"Repair requires {KESTREL.repair_maximum_speed_knots:g} knots or less in the game.")
+    selected_mode = order.setdefault("operating_mode", state["own"]["operating_mode"])
+    if not isinstance(selected_mode, str):
+        raise ValueError("operating_mode must name a published mode.")
+    mode = spec.mode(selected_mode)
+    if not mode.allows(order["speed"], order["depth"]):
+        raise ValueError(
+            f"The {selected_mode} operating mode does not allow the ordered speed/depth."
+        )
+    if activity in ("mast", "receive", "transmit") and (
+        spec.mast is None or not spec.mast.allows(order["depth"], order["speed"])
+    ):
+        if spec.mast is None:
+            raise ValueError("This platform has no implemented mast/link activity.")
+        raise ValueError(f"Mast/link envelope: {spec.mast.minimum_depth_feet:g} to {spec.mast.maximum_depth_feet:g} feet and at most {spec.mast.maximum_speed_knots:g} knots. Include those orders explicitly; no time has elapsed.")
+    if activity == "repair" and (
+        spec.repair_maximum_speed_knots is None
+        or order["speed"] > spec.repair_maximum_speed_knots
+    ):
+        if spec.repair_maximum_speed_knots is None:
+            raise ValueError("This platform has no implemented repair activity.")
+        raise ValueError(f"Repair requires {spec.repair_maximum_speed_knots:g} knots or less in the game.")
     if activity == "focus" and order.get("focus") not in [tr["id"] for tr in state["tracks"]]:
         raise ValueError("Focused analysis requires an existing contact id.")
     if "focus" in order and activity != "focus":
@@ -438,6 +603,7 @@ def simulate(state, seed, order):
     dice = Dice(seed, state["rng_trace"])
     for field in ("course", "speed", "depth"):
         state["own"][field] = float(order[field])
+    state["own"]["operating_mode"] = order["operating_mode"]
     state["focus"] = order.get("focus") if order["activity"] == "focus" else None
     stop = "requested_interval_complete"
     stop_events = []
@@ -477,6 +643,25 @@ def _execution_events(reports, categories):
     ]
 
 
+def capability_report():
+    result = KESTREL.public_capabilities()
+    result["entity_model"] = {
+        "definitions": public_entity_catalog(),
+        "shared_mechanics": [
+            "geometry and simultaneous movement",
+            "platform-specific operating envelopes and modes",
+            "operating-state acoustic signatures",
+            "consumable resource advancement",
+            "persistent equipment and inventory states",
+        ],
+        "scenario_selection": (
+            "Opposing entity specifications remain hidden until supported "
+            "observations identify them."
+        ),
+    }
+    return result
+
+
 def public_view(game):
     state = game["state"]
     own = state["own"]
@@ -496,9 +681,18 @@ def public_view(game):
             "initial_commitment_sha256": game["commitment"], "turn_receipt_sha256": game["head"],
             "engine_sha256": game["engine_sha256"], "mission": copy.deepcopy(MISSION),
             "command_contract": copy.deepcopy(COMMAND_CONTRACT),
-            "platform_capabilities": KESTREL.public_capabilities(),
+            "platform_capabilities": capability_report(),
             "own_ship": {"name": "Kestrel", "east_nm": round(own["x"], 3), "north_nm": round(own["y"], 3),
                          "course_true": own["course"], "speed_knots": own["speed"], "depth_feet": own["depth"],
+                         "operating_mode": own["operating_mode"],
+                         "resources": copy.deepcopy(own["resources"]),
+                         "equipment_states": copy.deepcopy(own["equipment"]),
+                         "inventory": copy.deepcopy(own["inventory"]),
+                         "restrictions": {
+                             "exercise": "Observation-only patrol.",
+                             "rules_of_engagement": "No offensive weapons employment authorized.",
+                             "employment_available": False,
+                         },
                          "equipment": "Auxiliary vibration; sonar self-noise elevated" if state["pump_fault"] else "All systems available",
                          "repair_minutes_completed": state["repair_progress"]},
             "navigation": {"relief_distance_nm": round(gap, 2), "relief_bearing_true": round(bearing(own, station)),
@@ -598,7 +792,7 @@ def debrief(game):
     verification = verify(game)
     state = game["state"]
     timely = [s for s in state["sent"] if s["elapsed_minutes"] <= REPORT_DUE]
-    primary_kind = game["initial_state"]["actors"][0]["kind"]
+    primary_kind = contact_kind(game["initial_state"]["actors"][0])
     evaluations = []
     for sent in state["sent"]:
         accurate = None if sent["assessment"] == "unresolved" else (sent["assessment"] == "submerged_present") == (primary_kind == "submerged")
@@ -626,7 +820,7 @@ def main():
     action.add_argument("--order-file", required=True)
     args = parser.parse_args()
     if args.command == "capabilities":
-        print(json.dumps(KESTREL.public_capabilities(), indent=2))
+        print(json.dumps(capability_report(), indent=2))
         return 0
     folder = Path(args.session)
     folder.mkdir(parents=True, exist_ok=True)

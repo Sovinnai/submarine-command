@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.4.** The hidden-state and replay foundation
+**Status: early prototype, version 0.5.** The hidden-state and replay foundation
 works. The acoustic and platform fidelity still needs substantial development.
 Unsupported systems are explicitly identified in the capability report.
 
@@ -88,10 +88,12 @@ python -m submarine_command --session .sessions/my-patrol verify
 
 Supported activities are `listen`, `focus`, `active`, `mast`, `receive`,
 `transmit`, `repair`, and `end`. Except for `end`, an order may also include
-`course`, `speed`, and `depth`. Orders run for 5–60 minutes in five-minute steps,
-with interruption on the selected events. Every result's `last_execution` states
-the requested, elapsed, and unused minutes; its stop reason and public report IDs
-explain why control returned. The unused portion is never resumed automatically.
+`course`, `speed`, `depth`, and a published `operating_mode`. Mode-specific and
+platform-wide envelopes are both validated. Orders run for 5–60 minutes in
+five-minute steps, with interruption on the selected events. Every result's
+`last_execution` states the requested, elapsed, and unused minutes; its stop
+reason and public report IDs explain why control returned. The unused portion is
+never resumed automatically.
 
 The engine uses one shared clock. At each step, opposing decisions use the
 start-of-step geometry, then own ship and every opposing platform move across the
@@ -129,13 +131,15 @@ verification. During active play, debrief refuses to reveal anything.
 | Area | Behavior |
 |---|---|
 | Hidden state | Persistent seed, fixed initial contacts, event-keyed random draws, replay verification, public-only outputs |
-| Platform | Fictional Kestrel-class nuclear exercise submarine; capability and validation limits share a definition |
+| Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
+| Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |
 | Sonar | Generic passive reception, focused analysis and active range measurement; signature cues are currently categorical |
 | Observations | Noisy bearings, timestamped own positions, measured bearing drift and correlated evidence windows |
 | Environment | Uncertain layer and simplified loss across it |
 | Communications | Mast receive/transmit with persistent link conditions |
 | Opposition | Limited-information detection and a simple evasive response |
-| Weapons | Observation-only exercise policy; no inventory or employment resolution |
+| Resources | Diesel battery use and snorkeling recharge, vessel fuel consumption, and persistent inventories advance on the shared clock |
+| Weapons | Fictional inventories are explicit; observation-only policy and unavailable employment are distinct |
 | Engineering | An auxiliary-noise fault and timed repair |
 | Narrator interface | Restricted local JSON-lines broker with opaque sessions and public-only operations |
 

@@ -19,7 +19,6 @@ import sys
 
 from . import engine
 from .locking import session_lock
-from .platforms import KESTREL
 
 PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = 64 * 1024
@@ -129,7 +128,7 @@ class SessionStore:
                 "orders": "act requires the current expected_turn and a unique order id",
                 "debrief": "available only after the exercise has ended",
             },
-            "platform": KESTREL.public_capabilities(),
+            "platform": engine.capability_report(),
         }
 
     def start(self, idempotency_key):

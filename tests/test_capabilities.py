@@ -8,7 +8,13 @@ import unittest
 import submarine_command
 from submarine_command import engine
 from submarine_command.observations import observed_bearing_drift
-from submarine_command.platforms import KESTREL
+from submarine_command.platforms import (
+    BIOLOGIC,
+    DART,
+    ENTITY_SPECS,
+    KESTREL,
+    EntityCategory,
+)
 
 
 class CapabilityTests(unittest.TestCase):
@@ -22,6 +28,7 @@ class CapabilityTests(unittest.TestCase):
         self.assertEqual(game["state"]["platform"], published["platform_id"])
         envelope = published["operating_envelope"]
         engine.validate_order({"id": "valid", "minutes": 5,
+                               "operating_mode": "high_power",
                                "speed": envelope["maximum_speed_knots"],
                                "depth": envelope["maximum_depth_feet"]}, game["state"])
         with self.assertRaises(ValueError):
@@ -49,6 +56,43 @@ class CapabilityTests(unittest.TestCase):
         self.assertFalse(public["environment"]["convergence_zone_modeled"])
         self.assertFalse(public["weapons"]["employment_modeled"])
         self.assertFalse(public["measurements"]["numeric_narrowband_frequencies"])
+
+    def test_catalog_defines_every_requested_entity_category(self):
+        self.assertEqual(
+            {spec.category for spec in ENTITY_SPECS},
+            {
+                EntityCategory.SSN,
+                EntityCategory.DIESEL_SUBMARINE,
+                EntityCategory.MERCHANT,
+                EntityCategory.SURFACE_WARSHIP,
+                EntityCategory.FISHING_VESSEL,
+                EntityCategory.BIOLOGIC,
+            },
+        )
+        for spec in ENTITY_SPECS:
+            initial = spec.initial_components()
+            self.assertIn(initial["operating_mode"], {
+                mode.identifier for mode in spec.modes
+            })
+
+    def test_diesel_configuration_has_real_energy_and_snorkel_tradeoffs(self):
+        battery = DART.resources[0].public_definition()
+        self.assertGreater(battery["consumption_per_hour"]["hotel"], 0)
+        self.assertGreater(
+            battery["replenishment_per_hour_by_mode"]["snorkeling"],
+            battery["replenishment_per_hour_by_mode"]["aip"],
+        )
+        snorkel = DART.mode("snorkeling")
+        battery_mode = DART.mode("battery")
+        self.assertGreater(snorkel.relative_noise, battery_mode.relative_noise)
+        self.assertLessEqual(snorkel.depth_maximum_feet, 60)
+
+    def test_biologic_is_a_motion_and_signature_entity_without_vessel_components(self):
+        self.assertEqual(BIOLOGIC.category, EntityCategory.BIOLOGIC)
+        self.assertGreater(BIOLOGIC.envelope.maximum_depth_feet, 0)
+        self.assertTrue(all(mode.relative_noise > 0 for mode in BIOLOGIC.modes))
+        self.assertEqual(BIOLOGIC.sensors, ())
+        self.assertEqual(BIOLOGIC.weapons, ())
 
 
 class BearingDriftTests(unittest.TestCase):
