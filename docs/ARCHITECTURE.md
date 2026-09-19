@@ -52,7 +52,8 @@ retains shell access under the same account remains policy-only isolation.
 ## Known simplifications
 
 - One generic acoustic receiver with automatic track/cross-sensor association.
-- Constant settings within five-minute ticks; no turn-rate or acceleration model.
+- Own-ship turn, acceleration and depth rates resolved on one-minute increments;
+  opposing entities change settings at five-minute boundaries without transients.
 - Simplified range attenuation and layer loss instead of path-dependent propagation.
 - Categorical signature evidence rather than numeric narrowband spectra.
 - Crew disagreement from different priors applied to shared evidence.

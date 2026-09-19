@@ -27,17 +27,21 @@ class CapabilityTests(unittest.TestCase):
         self.assertEqual(published["propulsion"], "nuclear")
         self.assertEqual(game["state"]["platform"], published["platform_id"])
         envelope = published["operating_envelope"]
-        engine.validate_order({"id": "valid", "minutes": 5,
-                               "operating_mode": "high_power",
-                               "speed": envelope["maximum_speed_knots"],
-                               "depth": envelope["maximum_depth_feet"]}, game["state"])
+        base = {"id": "valid", "expected_turn": 0, "activity": "listen", "minutes": 5,
+                "interrupt_on": [], "course": 90, "operating_mode": "high_power",
+                "speed": envelope["maximum_speed_knots"],
+                "depth": envelope["maximum_depth_feet"]}
+        engine.validate_order(base, game["state"])
         with self.assertRaises(ValueError):
-            engine.validate_order({"id": "invalid", "speed": envelope["maximum_speed_knots"] + 1}, game["state"])
+            engine.validate_order({**base, "id": "invalid",
+                                   "speed": envelope["maximum_speed_knots"] + 1}, game["state"])
 
     def test_published_link_envelope_is_enforced(self):
         game = engine.initialize("45" * 32)
         limits = KESTREL.public_capabilities()["communications"]["mast_envelope"]
-        raw = {"id": "rx", "activity": "receive", "depth": limits["maximum_depth_feet"], "speed": limits["maximum_speed_knots"]}
+        raw = {"id": "rx", "expected_turn": 0, "activity": "receive", "minutes": 5,
+               "interrupt_on": [], "course": 90, "operating_mode": "standard",
+               "depth": limits["maximum_depth_feet"], "speed": limits["maximum_speed_knots"]}
         engine.validate_order(raw, game["state"])
         with self.assertRaises(ValueError):
             engine.validate_order({**raw, "depth": limits["maximum_depth_feet"] + 1}, game["state"])

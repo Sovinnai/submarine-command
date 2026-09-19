@@ -69,13 +69,20 @@ status. A weak or reused key could let another client recover that session.
 {"v":1,"request_id":"r3","op":"history","session_id":"opaque-token-from-start","params":{}}
 ```
 
-`act` requires one order object. Restricted-interface orders must include the
-current public `expected_turn` as well as a unique order `id`. Retrying exactly
-the same order is idempotent. Reusing its ID for different content, or sending a
-new order for a stale turn, is rejected before state mutation.
+`act` requires one order object. Every order field must be stated: the engine
+supplies no default, so a missing `activity`, `minutes`, `course`, `speed`,
+`depth`, `operating_mode`, `interrupt_on` or `expected_turn` is rejected before
+state mutation rather than filled in from the current settings. The narrator must
+therefore read `own_ship` and restate the settings it intends to keep. Because a
+maneuver takes simulated time, `own_ship.maneuver` reports the commanded value
+beside the achieved one: restate the commanded value to continue a maneuver in
+progress, not the achieved value, which would level the boat off where it is.
+Retrying exactly the same order is idempotent. Reusing its ID for different
+content, or sending a new order for a stale turn, is rejected before state
+mutation.
 
 ```json
-{"v":1,"request_id":"r4","op":"act","session_id":"opaque-token-from-start","params":{"order":{"id":"order-001","expected_turn":0,"activity":"listen","minutes":10,"interrupt_on":["new_contact","equipment"]}}}
+{"v":1,"request_id":"r4","op":"act","session_id":"opaque-token-from-start","params":{"order":{"id":"order-001","expected_turn":0,"activity":"listen","minutes":10,"course":90,"speed":5,"depth":400,"operating_mode":"standard","interrupt_on":["new_contact","equipment"]}}}
 ```
 
 `debrief` requires a session and no parameters. It is rejected while the

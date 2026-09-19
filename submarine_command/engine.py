@@ -30,8 +30,9 @@ from .platforms import (
     public_entity_catalog,
 )
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 TICK = 5
+MANEUVER_STEP = 1
 END = 290
 REPORT_DUE = 260
 KINDS = ("surface", "submerged", "biologic")
@@ -69,13 +70,28 @@ COMMAND_CONTRACT = {
         "step_minutes": TICK,
         "description": "The engine resolves all platform movement and world effects on one shared clock in five-minute steps. Five minutes is sufficient for this prototype's coarse navigation, contact, link, and equipment decisions; acceleration, turn rate, and sub-step event timing are deliberately simplified.",
     },
+    "maneuver": {
+        "ordered_versus_achieved": "An order states the commanded course, speed, depth, and operating mode. Those become the standing commanded settings; they are not achieved instantly. Actual course, speed, and depth move toward them at the published maneuver rates and are reported separately from the commanded settings.",
+        "resolution_step_minutes": MANEUVER_STEP,
+        "resolution": "Own-ship motion is integrated in one-minute increments inside each five-minute step so a maneuver crossing an envelope during the step is resolved at the crossing, not at the endpoint. No random draw occurs inside that integration; every world draw remains at the five-minute boundary.",
+        "depth_rate": "Ordered depth change is resolved at a rate proportional to actual speed. A boat at bare steerageway changes depth slowly; a boat at high speed changes depth quickly and is also loud.",
+        "standing_settings": "Commanded settings persist in world state until the next order replaces them. Every order replaces all of them; an omitted field is rejected, never carried forward silently. An interrupt returns control without altering the commanded settings, and the execution receipt reports both achieved and commanded values.",
+        "opposing_platforms": "Opposing entities are not rate-limited in this rules version. Their course, speed, depth, and operating-mode changes still occur only at five-minute boundaries.",
+    },
     "concurrency": {
-        "maneuver": "Course, speed, and depth settings take effect at the start of the first five-minute step and remain in force. Own ship and opposing platforms then move over the same elapsed step.",
+        "maneuver": "Commanded course, speed, depth, and operating mode take effect at the start of the first five-minute step as standing settings. Actual values then transit toward them at the published rates while own ship and opposing platforms move over the same elapsed step.",
         "observation": "Passive or focused acoustic integration occupies each complete five-minute step and runs concurrently with movement and the selected equipment activity. Results are reported at the step endpoint.",
         "active": "The active transmission and its observation integration occupy the first five-minute step; later requested steps revert to passive observation.",
-        "mast": "Mast deployment, visual observation, and recovery form a five-minute cycle concurrent with movement. Results are available at the step endpoint.",
-        "communications": "Each receive or transmit link attempt occupies one five-minute step, includes mast deployment and recovery, and runs concurrently with movement and passive observation. A usable receive link or acknowledged transmission completes the task; a failed link may be retried in a later step unless selected as an interrupt.",
-        "repair": "Repair needs 20 productive minutes at no more than the published repair speed. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
+        "mast": "Mast deployment, visual observation, and recovery form a five-minute cycle concurrent with movement. The cycle requires the whole five minutes inside the published mast depth and speed envelope; a step spent transiting toward mast depth defers it and reports the achieved and commanded settings. Results are available at the step endpoint.",
+        "communications": "Each receive or transmit link attempt occupies one five-minute step, includes mast deployment and recovery, and runs concurrently with movement and passive observation. Like mast observation, an attempt requires the whole step inside the mast envelope; steps spent reaching it are deferred and reported. A usable receive link or acknowledged transmission completes the task; a failed link may be retried in a later step unless selected as an interrupt.",
+        "repair": "Repair needs 20 productive minutes at no more than the published repair speed. Only the minutes actually spent at or below that speed count, so a step spent decelerating earns partial credit. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
+        "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. The mode's published speed limit is its only resolved effect on own ship in this rules version. Own-ship radiated noise and opposing detection are not derived from the operating mode, so selecting a quieter plant state carries no direct counter-detection benefit beyond the speed it permits.",
+    },
+    "order_fields": {
+        "required": ["id", "expected_turn", "activity", "minutes", "course", "speed", "depth", "operating_mode", "interrupt_on"],
+        "conditional": {"focus": "focus activity", "assessment": "transmit activity", "message": "transmit activity", "basis": "transmit activity"},
+        "end_order": ["id", "expected_turn", "activity"],
+        "description": "Every listed field must be stated explicitly. The engine supplies no default for any order field: an omitted field is rejected before any state changes rather than being filled in from current or previous settings. An empty interrupt_on list means no interrupt is selected, and an empty basis list means the assessment cites no report.",
     },
     "interrupts": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category and report id from that boundary; the unused portion is never continued automatically.",
 }
@@ -136,10 +152,128 @@ def distance(a, b):
     return math.hypot(a["x"] - b["x"], a["y"] - b["y"])
 
 
-def move(obj):
-    angle = math.radians(obj["course"])
-    obj["x"] += math.sin(angle) * obj["speed"] * TICK / 60
-    obj["y"] += math.cos(angle) * obj["speed"] * TICK / 60
+def move(obj, minutes, course=None, speed=None):
+    """Advance a position over an interval, optionally on a mean course/speed."""
+    angle = math.radians(obj["course"] if course is None else course)
+    rate = obj["speed"] if speed is None else speed
+    obj["x"] += math.sin(angle) * rate * minutes / 60
+    obj["y"] += math.cos(angle) * rate * minutes / 60
+
+
+def approach(current, ordered, rate, minutes):
+    """Move a scalar toward its ordered value at a bounded rate, never past it."""
+    step = rate * minutes
+    return min(ordered, current + step) if current < ordered else max(ordered, current - step)
+
+
+def course_step(current, ordered, rate, minutes):
+    """Return the shortest-arc turn available in the interval and where it lands.
+
+    The landing course is the ordered value itself once the whole remaining
+    difference fits in the interval. Adding the increment instead would leave
+    floating-point dust a hair off the ordered course, which reads as a
+    maneuver still in progress for the rest of the exercise. An exact reversal
+    is resolved to port so that replay stays deterministic.
+    """
+    difference = (ordered - current + 180) % 360 - 180
+    limit = rate * minutes
+    if abs(difference) <= limit:
+        return difference, ordered % 360
+    turn = math.copysign(limit, difference)
+    return turn, (current + turn) % 360
+
+
+def advance_own(state, minutes):
+    """Integrate own-ship kinematics toward the commanded settings.
+
+    Deliberately free of random draws: every world draw stays keyed to the
+    five-minute boundary, so sub-stepping cannot collide two draws on one
+    event label. Returns the minutes actually spent inside the mast envelope
+    and at or below the repair speed, which the activities consume.
+    """
+    own, ordered = state["own"], state["ordered"]
+    spec = entity_spec(own)
+    rates = spec.maneuver
+    within_mast = 0.0
+    within_repair = 0.0
+    remaining = minutes
+    while remaining > 1e-9:
+        span = min(MANEUVER_STEP, remaining)
+        remaining -= span
+        if spec.mast is not None and spec.mast.allows(own["depth"], own["speed"]):
+            within_mast += span
+        if spec.repair_maximum_speed_knots is not None and own["speed"] <= spec.repair_maximum_speed_knots:
+            within_repair += span
+        if rates is None:
+            move(own, span)
+            continue
+        # The depth rate uses the speed held at the start of the increment,
+        # matching the engine's start-of-step convention for every decision.
+        depth_rate = rates.depth_rate(own["speed"])
+        speed_rate = rates.speed_rate(own["speed"], ordered["speed"])
+        turn, new_course = course_step(own["course"], ordered["course"],
+                                       rates.turn_degrees_per_minute, span)
+        new_speed = approach(own["speed"], ordered["speed"], speed_rate, span)
+        # Position uses the mean course and speed over the increment rather
+        # than either endpoint, so a turn does not make its whole distance
+        # good on the new heading.
+        move(own, span, course=(own["course"] + turn / 2) % 360,
+             speed=(own["speed"] + new_speed) / 2)
+        own["course"] = new_course
+        own["speed"] = new_speed
+        own["depth"] = approach(own["depth"], ordered["depth"], depth_rate, span)
+    return {"mast_minutes": within_mast, "repair_minutes": within_repair}
+
+
+def settle_operating_mode(state):
+    """Adopt the commanded mode once achieved speed and depth permit it."""
+    own, ordered = state["own"], state["ordered"]
+    commanded = ordered["operating_mode"]
+    if own["operating_mode"] == commanded:
+        return
+    if not entity_spec(own).mode(commanded).allows(own["speed"], own["depth"]):
+        return
+    own["operating_mode"] = commanded
+    report(state, "Engineering",
+           f"Plant is now in the {commanded} operating mode.", "operating_mode")
+
+
+def maneuver_view(state):
+    """Report commanded and achieved settings side by side."""
+    own, ordered = state["own"], state["ordered"]
+    rates = entity_spec(own).maneuver
+    axes = {}
+    # Compare the stored values and round only for display: a commanded
+    # fractional course must not read as permanently in progress.
+    for field, places in (("course", 2), ("speed", 3), ("depth", 2), ("operating_mode", None)):
+        achieved = own[field] if places is None else round(own[field], places)
+        axes[field] = {"ordered": ordered[field], "achieved": achieved,
+                       "in_progress": ordered[field] != own[field]}
+    remaining = abs(ordered["depth"] - own["depth"])
+    rate = rates.depth_rate(own["speed"]) if rates else 0
+    axes["estimated_minutes_to_ordered_depth"] = round(remaining / rate, 1) if remaining and rate else 0
+    axes["estimate_basis"] = ("Computed at the present speed. A commanded speed change alters "
+                              "the depth rate and therefore this estimate.")
+    return axes
+
+
+def settings_text(state):
+    """Report the achieved settings against the ones commanded."""
+    own, ordered = state["own"], state["ordered"]
+    return (f"Depth {own['depth']:.0f} feet for ordered {ordered['depth']:.0f} feet, "
+            f"speed {own['speed']:.1f} knots for ordered {ordered['speed']:.1f} knots.")
+
+
+def deferred_text(state, activity, inside_minutes):
+    """Explain a deferred activity by the time actually spent in its envelope."""
+    return (f"{activity} not carried out this step: {inside_minutes:g} of {TICK} minutes were "
+            f"inside the mast envelope, and the cycle needs the whole step. {settings_text(state)}")
+
+
+def steady_text(state):
+    own = state["own"]
+    return (f"Steady on ordered course {own['course']:03.0f}, speed {own['speed']:.1f} knots, "
+            f"depth {own['depth']:.0f} feet, {own['operating_mode']} mode.")
 
 
 def entity_spec(entity):
@@ -309,9 +443,12 @@ def new_world(seed):
     state = {"t": 0, "platform": KESTREL.identifier,
              "own": make_entity(KESTREL, id="own-kestrel", x=0.0, y=0.0,
                                 course=90.0, speed=5.0, depth=400.0),
+             "ordered": {"course": 90.0, "speed": 5.0, "depth": 400.0,
+                         "operating_mode": KESTREL.default_mode},
              "actors": [], "tracks": [], "reports": [], "rng_trace": [], "focus": None,
              "pump_fault": False, "repair_progress": 0, "received": [], "sent": [],
-             "ended": False, "end_reason": None, "deadline_announced": False, "last_action_report_start": 0}
+             "ended": False, "end_reason": None, "deadline_announced": False,
+             "maneuvering": False, "last_action_report_start": 0}
     dice = Dice(seed, state["rng_trace"])
     state["layer"] = dice.between("initial:layer", 260, 350)
     state["bearing_bias"] = dice.between("initial:bearing-bias", -2, 2)
@@ -466,10 +603,11 @@ def tick_world(state, dice, order, first_tick):
     for actor in state["actors"]:
         prepare_actor_step(state, actor, dice)
         opponent_step(state, actor, dice, active)
-    move(state["own"])
+    achieved = advance_own(state, TICK)
+    settle_operating_mode(state)
     advance_entity_components(state["own"])
     for actor in state["actors"]:
-        move(actor)
+        move(actor, TICK)
         advance_entity_components(actor)
     if active:
         report(state, "Sonar", "One active acoustic transmission made.", "emission")
@@ -479,9 +617,15 @@ def tick_world(state, dice, order, first_tick):
     for tr in state["tracks"]:
         if t - tr["last"] == 20:
             report(state, "Sonar", f"{tr['id']}: no further observation for 20 minutes. Last report is now stale; contact fate unknown.", "contact_lost", contact=tr["id"])
-    if order["activity"] == "mast":
+    if order["activity"] in ("mast", "receive", "transmit") and achieved["mast_minutes"] < TICK:
+        # The published cycle is five minutes of deployment, operation and
+        # recovery; a step spent reaching the envelope cannot contain one.
+        report(state, "Ship control",
+               deferred_text(state, order["activity"], achieved["mast_minutes"]),
+               "activity_deferred")
+    elif order["activity"] == "mast":
         mast_observations(state, dice)
-    if order["activity"] in ("receive", "transmit"):
+    elif order["activity"] in ("receive", "transmit"):
         channel = dice.u(f"radio-window:{t//20}")
         if channel >= state["radio_reliability"]:
             report(state, "Radio", "No usable link this interval; cause undetermined.", "radio_failure")
@@ -498,7 +642,12 @@ def tick_world(state, dice, order, first_tick):
             report(state, "Radio", "Assessment transmitted and acknowledged.", "transmission_complete", transmitted=sent)
     if order["activity"] == "repair":
         if state["pump_fault"]:
-            state["repair_progress"] += TICK
+            if achieved["repair_minutes"] < TICK:
+                report(state, "Engineering",
+                       f"Repair credited {achieved['repair_minutes']:g} of {TICK} minutes at or below "
+                       f"{entity_spec(state['own']).repair_maximum_speed_knots:g} knots. {settings_text(state)}",
+                       "activity_deferred")
+            state["repair_progress"] += achieved["repair_minutes"]
             if state["repair_progress"] >= 20:
                 state["pump_fault"] = False
                 state["repair_progress"] = 0
@@ -511,6 +660,11 @@ def tick_world(state, dice, order, first_tick):
             state["pump_fault"] = True
             state["repair_progress"] = 0
             report(state, "Engineering", "Auxiliary pump vibration has increased. Propulsion remains available; sonar self-noise is elevated. Repair requires 20 minutes at 10 knots or less.", "equipment")
+    if state["maneuvering"] and not any(
+            maneuver_view(state)[field]["in_progress"]
+            for field in ("course", "speed", "depth", "operating_mode")):
+        state["maneuvering"] = False
+        report(state, "Ship control", steady_text(state), "maneuver_complete")
     if t >= REPORT_DUE and not state["deadline_announced"]:
         state["deadline_announced"] = True
         report(state, "Navigation", "0730 assessment deadline reached.", "deadline")
@@ -520,6 +674,15 @@ def tick_world(state, dice, order, first_tick):
         report(state, "Navigation", "0800. Patrol exercise complete; the debrief can now be requested.", "exercise_end")
 
 
+def require(order, field):
+    """Reject an unstated field rather than choosing a value for the captain."""
+    if field not in order:
+        raise ValueError(
+            f"{field} must be stated explicitly; the engine supplies no default. "
+            "No time has elapsed and nothing changed."
+        )
+
+
 def validate_order(raw, state):
     allowed = {"id", "minutes", "course", "speed", "depth", "operating_mode", "activity", "focus", "assessment", "message", "basis", "interrupt_on", "expected_turn"}
     if not isinstance(raw, dict) or set(raw) - allowed:
@@ -527,27 +690,32 @@ def validate_order(raw, state):
     if not isinstance(raw.get("id"), str) or not 1 <= len(raw["id"]) <= 80:
         raise ValueError("A unique order id of 1 to 80 characters is required.")
     order = copy.deepcopy(raw)
-    order.setdefault("activity", "listen")
+    # No field is defaulted. An unstated setting is a rejected order, never an
+    # assumed one: the engine must not choose a depth, speed, course, plant
+    # lineup, duration or interrupt policy that the captain did not state.
+    require(order, "activity")
     activity = order["activity"]
     if activity not in ("listen", "focus", "active", "mast", "receive", "transmit", "repair", "end"):
         raise ValueError("Unsupported activity. No time has elapsed; agree on an applicable rule before proceeding.")
-    order.setdefault("minutes", 0 if activity == "end" else 15)
-    minutes = order["minutes"]
-    if type(minutes) is not int or (minutes != 0 if activity == "end" else not (5 <= minutes <= 60 and minutes % 5 == 0)):
-        raise ValueError("Use 5 to 60 minutes in five-minute steps, or zero for end.")
     if activity == "end":
-        if set(raw) - {"id", "activity", "minutes", "expected_turn"}:
-            raise ValueError("An end order cannot include other actions.")
+        if set(raw) - {"id", "activity", "expected_turn"}:
+            raise ValueError("An end order takes only id, expected_turn and activity; it has no duration or other action.")
         return order
+    require(order, "minutes")
+    minutes = order["minutes"]
+    if type(minutes) is not int or not (5 <= minutes <= 60 and minutes % 5 == 0):
+        raise ValueError("Use 5 to 60 minutes in five-minute steps.")
     spec = entity_spec(state["own"])
     envelope = spec.envelope
     for field, low, high in (("course", 0, 359.999999),
                              ("speed", envelope.minimum_speed_knots, envelope.maximum_speed_knots),
                              ("depth", envelope.minimum_depth_feet, envelope.maximum_depth_feet)):
-        value = order.setdefault(field, state["own"][field])
+        require(order, field)
+        value = order[field]
         if type(value) not in (int, float) or not math.isfinite(value) or not low <= value <= high:
             raise ValueError(f"{field} must be between {low} and {high} in the fictional game envelope.")
-    selected_mode = order.setdefault("operating_mode", state["own"]["operating_mode"])
+    require(order, "operating_mode")
+    selected_mode = order["operating_mode"]
     if not isinstance(selected_mode, str):
         raise ValueError("operating_mode must name a published mode.")
     mode = spec.mode(selected_mode)
@@ -568,22 +736,28 @@ def validate_order(raw, state):
         if spec.repair_maximum_speed_knots is None:
             raise ValueError("This platform has no implemented repair activity.")
         raise ValueError(f"Repair requires {spec.repair_maximum_speed_knots:g} knots or less in the game.")
-    if activity == "focus" and order.get("focus") not in [tr["id"] for tr in state["tracks"]]:
-        raise ValueError("Focused analysis requires an existing contact id.")
+    if activity == "focus":
+        require(order, "focus")
+        if order["focus"] not in [tr["id"] for tr in state["tracks"]]:
+            raise ValueError("Focused analysis requires an existing contact id.")
     if "focus" in order and activity != "focus":
         raise ValueError("The focus field requires the focus activity.")
     if activity == "transmit":
-        if order.get("assessment") not in ("submerged_present", "surface_or_biologic", "unresolved"):
+        require(order, "assessment")
+        require(order, "message")
+        if order["assessment"] not in ("submerged_present", "surface_or_biologic", "unresolved"):
             raise ValueError("Transmission requires assessment: submerged_present, surface_or_biologic, or unresolved.")
-        if not isinstance(order.get("message"), str) or not 1 <= len(order["message"]) <= 4000:
+        if not isinstance(order["message"], str) or not 1 <= len(order["message"]) <= 4000:
             raise ValueError("Transmission requires a message of 1 to 4000 characters.")
-        order.setdefault("basis", [])
+        require(order, "basis")
         if not isinstance(order["basis"], list) or any(not isinstance(r, str) or r not in [p["id"] for p in state["reports"]] for r in order["basis"]):
             raise ValueError("Basis must list existing report ids only.")
     elif {"assessment", "message", "basis"} & set(raw):
         raise ValueError("Assessment, message and basis fields require transmit activity.")
-    order.setdefault("interrupt_on", ["new_contact", "classification_change", "equipment", "deadline"])
-    valid_interrupts = {"new_contact", "classification_change", "equipment", "deadline", "contact_lost", "message_received", "radio_failure"}
+    require(order, "interrupt_on")
+    valid_interrupts = {"new_contact", "classification_change", "equipment", "deadline", "contact_lost",
+                        "message_received", "radio_failure", "maneuver_complete", "activity_deferred",
+                        "operating_mode"}
     if not isinstance(order["interrupt_on"], list) or any(x not in valid_interrupts for x in order["interrupt_on"]):
         raise ValueError("Unknown interrupt condition.")
     return order
@@ -591,19 +765,23 @@ def validate_order(raw, state):
 
 def simulate(state, seed, order):
     state["last_action_report_start"] = len(state["reports"])
-    requested = order["minutes"]
     if order["activity"] == "end":
         state["ended"] = True
         state["end_reason"] = "Captain ended the exercise"
         ending = report(state, "Exercise", "Exercise ended by the captain.", "exercise_end")
         return {"requested_minutes": 0, "elapsed_minutes": 0, "unused_minutes": 0,
                 "integration_steps": 0, "stop_reason": "exercise_end",
-                "stop_events": [{"category": "exercise_end", "report_ids": [ending["id"]]}]}
+                "stop_events": [{"category": "exercise_end", "report_ids": [ending["id"]]}],
+                "maneuver": maneuver_view(state)}
+    requested = order["minutes"]
     start = state["t"]
     dice = Dice(seed, state["rng_trace"])
-    for field in ("course", "speed", "depth"):
-        state["own"][field] = float(order[field])
-    state["own"]["operating_mode"] = order["operating_mode"]
+    ordered = {field: float(order[field]) for field in ("course", "speed", "depth")}
+    ordered["operating_mode"] = order["operating_mode"]
+    state["ordered"] = ordered
+    state["maneuvering"] = any(
+        ordered[field] != state["own"][field]
+        for field in ("course", "speed", "depth", "operating_mode"))
     state["focus"] = order.get("focus") if order["activity"] == "focus" else None
     stop = "requested_interval_complete"
     stop_events = []
@@ -631,7 +809,8 @@ def simulate(state, seed, order):
     elapsed = state["t"] - start
     return {"requested_minutes": requested, "elapsed_minutes": elapsed,
             "unused_minutes": requested - elapsed, "integration_steps": elapsed // TICK,
-            "stop_reason": stop, "stop_events": stop_events}
+            "stop_reason": stop, "stop_events": stop_events,
+            "maneuver": maneuver_view(state)}
 
 
 def _execution_events(reports, categories):
@@ -647,6 +826,25 @@ def capability_report():
     result = KESTREL.public_capabilities()
     result["entity_model"] = {
         "definitions": public_entity_catalog(),
+        "own_ship_operating_mode": {
+            "speed_limit_enforced": True,
+            "radiated_noise_modeled": False,
+            "description": (
+                "An operating mode caps own-ship speed and is reported, but "
+                "own-ship radiated noise and opposing detection are not yet "
+                "derived from it. Opposing detection uses own-ship speed, range "
+                "and active transmission only."
+            ),
+        },
+        "maneuver_transients": {
+            "own_ship_rate_limited": True,
+            "opposing_entities_rate_limited": False,
+            "description": (
+                "Own-ship course, speed and depth transit toward the commanded "
+                "settings at the published rates. Opposing entities change theirs "
+                "at five-minute boundaries without a modeled transition."
+            ),
+        },
         "shared_mechanics": [
             "geometry and simultaneous movement",
             "platform-specific operating envelopes and modes",
@@ -683,8 +881,11 @@ def public_view(game):
             "command_contract": copy.deepcopy(COMMAND_CONTRACT),
             "platform_capabilities": capability_report(),
             "own_ship": {"name": "Kestrel", "east_nm": round(own["x"], 3), "north_nm": round(own["y"], 3),
-                         "course_true": own["course"], "speed_knots": own["speed"], "depth_feet": own["depth"],
+                         "course_true": round(own["course"], 2), "speed_knots": round(own["speed"], 3),
+                         "depth_feet": round(own["depth"], 2),
                          "operating_mode": own["operating_mode"],
+                         "ordered": copy.deepcopy(state["ordered"]),
+                         "maneuver": maneuver_view(state),
                          "resources": copy.deepcopy(own["resources"]),
                          "equipment_states": copy.deepcopy(own["equipment"]),
                          "inventory": copy.deepcopy(own["inventory"]),
@@ -724,7 +925,12 @@ def apply_order(game, raw):
             return copy.deepcopy(event["public_result"])
     if game["state"]["ended"]:
         raise ValueError("The exercise has ended. Request the debrief or review existing reports.")
-    if "expected_turn" in raw and (type(raw["expected_turn"]) is not int or raw["expected_turn"] != len(game["events"])):
+    if "expected_turn" not in raw:
+        raise ValueError(
+            "expected_turn must be stated explicitly; the engine supplies no default. "
+            "No time has elapsed and nothing changed."
+        )
+    if type(raw["expected_turn"]) is not int or raw["expected_turn"] != len(game["events"]):
         raise ValueError("The expected turn is stale; review the current report before giving an order.")
     order = validate_order(raw, game["state"])
     # All validation precedes mutation. CLI adds an atomic write and file lock.

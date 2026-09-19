@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.5.** The hidden-state and replay foundation
+**Status: early prototype, version 0.6.** The hidden-state and replay foundation
 works. The acoustic and platform fidelity still needs substantial development.
 Unsupported systems are explicitly identified in the capability report.
 
@@ -77,6 +77,10 @@ Write a JSON file outside the tracked source, for example `.sessions/order.json`
   "activity": "focus",
   "focus": "S01",
   "minutes": 20,
+  "course": 90,
+  "speed": 5,
+  "depth": 400,
+  "operating_mode": "standard",
   "interrupt_on": ["new_contact", "classification_change", "equipment", "contact_lost"]
 }
 ```
@@ -87,8 +91,13 @@ python -m submarine_command --session .sessions/my-patrol verify
 ```
 
 Supported activities are `listen`, `focus`, `active`, `mast`, `receive`,
-`transmit`, `repair`, and `end`. Except for `end`, an order may also include
-`course`, `speed`, `depth`, and a published `operating_mode`. Mode-specific and
+`transmit`, `repair`, and `end`. **Every field must be stated.** The engine
+supplies no default for any of them: an order missing `course`, `speed`,
+`depth`, `operating_mode`, `minutes`, `activity`, `interrupt_on` or
+`expected_turn` is rejected before anything changes, rather than being filled in
+from the current settings. An empty `interrupt_on` means no interrupt was
+selected, and an empty `basis` means the assessment cites no report. An `end`
+order takes only `id`, `expected_turn` and `activity`. Mode-specific and
 platform-wide envelopes are both validated. Orders run for 5–60 minutes in
 five-minute steps, with interruption on the selected events. Every result's
 `last_execution` states the requested, elapsed, and unused minutes; its stop
@@ -97,8 +106,16 @@ never resumed automatically.
 
 The engine uses one shared clock. At each step, opposing decisions use the
 start-of-step geometry, then own ship and every opposing platform move across the
-same five minutes. Maneuver settings apply at the start of the first step;
-acceleration, turn rate, and transient depth changes are deliberately abstracted.
+same five minutes. Commanded course, speed, depth and operating mode become the
+standing settings at the start of the first step, but they are not achieved
+instantly: actual values transit toward them at the published maneuver rates,
+resolved on one-minute increments inside each step. Depth rate is proportional to
+actual speed, so coming shallow quickly also means going fast and being loud.
+`own_ship.maneuver` and `last_execution.maneuver` report the achieved value, the
+commanded value and whether the maneuver is still in progress. An interrupt
+returns control without cancelling it, but the next order must restate the
+commanded settings like any other. Opposing entities are not rate-limited in this
+rules version; the capability report states that.
 Passive or focused observation integration runs concurrently and reports at the
 step endpoint. Active means one pulse during the first step, followed by passive
 listening.
@@ -108,21 +125,28 @@ operation, and recovery cycles concurrent with movement and passive observation.
 A usable receive link—whether or not a message is waiting—or an acknowledged
 transmission completes that task and returns control. A failed link consumes its
 five minutes and is retried during the same command window unless `radio_failure`
-is an interrupt. Repair requires 20 productive minutes at 10 knots or less,
-persists across command windows, and is concurrent with movement and observation.
+is an interrupt. A cycle requires the whole step inside the mast envelope, so a
+step spent transiting toward mast depth is reported as `activity_deferred` with
+the achieved and ordered settings, and costs its five minutes. Repair requires 20
+productive minutes at 10 knots or less, counting only the minutes actually spent
+at or below that speed, persists across command windows, and is concurrent with
+movement and observation.
 The public `command_contract` reports these rules in machine-readable form.
 
 A transmission requires `assessment` (`submerged_present`,
-`surface_or_biologic`, or `unresolved`), a `message`, and optionally a `basis`
-list containing existing report IDs. Link activity requires the published
-mast depth and speed envelope. These are in-game messages only.
+`surface_or_biologic`, or `unresolved`), a `message`, and a `basis` list of
+existing report IDs. Like every other field, `basis` must be stated: an empty
+list is the explicit declaration that the assessment cites no report. Link
+activity requires the published mast depth and speed envelope. These are in-game
+messages only.
 
 Retry an uncertain operation using its **identical order JSON and id**. The engine
 returns the cached result without applying it again. A later order needs a new
 id. A retry of an older order returns its historical result; use `status` for the
 current display. Invalid orders leave the saved state untouched.
 
-To end an exercise early, submit a zero-minute `end` order. At the normal ending
+To end an exercise early, submit an `end` order carrying only `id`,
+`expected_turn` and `activity`; it has no duration. At the normal ending
 or after that order, `debrief` reveals the seed, truth, action log and replay
 verification. During active play, debrief refuses to reveal anything.
 
@@ -133,6 +157,7 @@ verification. During active play, debrief refuses to reveal anything.
 | Hidden state | Persistent seed, fixed initial contacts, event-keyed random draws, replay verification, public-only outputs |
 | Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |
+| Maneuver | Ordered course, speed, depth and mode resolved over simulated time at published turn, acceleration and speed-proportional depth rates; achieved and ordered reported separately |
 | Sonar | Generic passive reception, focused analysis and active range measurement; signature cues are currently categorical |
 | Observations | Noisy bearings, timestamped own positions, measured bearing drift and correlated evidence windows |
 | Environment | Uncertain layer and simplified loss across it |

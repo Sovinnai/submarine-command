@@ -23,15 +23,38 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
-In rules version 0.3, a command window is 5–60 minutes in five-minute increments.
-Five minutes is the minimum resolution needed by the prototype's coarse
-navigation, contact, communications and equipment choices. Events are therefore
-located at step boundaries; sub-step timing, acceleration and turn rate are
-deliberate simplifications. Opposing decisions use start-of-step information,
-then every platform moves over the same elapsed step. No side receives a frozen
-movement interval.
+In rules version 0.6, a command window is 5–60 minutes in five-minute increments.
+Five minutes is the resolution at which the world reports and at which every
+random draw is keyed. Events are therefore located at step boundaries. Opposing
+decisions use start-of-step information, then every platform moves over the same
+elapsed step. No side receives a frozen movement interval.
 
-Maneuver settings apply at the beginning of the first step and persist.
+Own-ship motion is integrated in one-minute increments inside each step so that
+an ordered maneuver crossing an operating envelope is resolved at the crossing
+rather than at the endpoint. That integration is deterministic: no random draw
+occurs inside it, which keeps every draw keyed to one world event at one time.
+
+An order states commanded course, speed, depth and operating mode. Those become
+the standing commanded settings at the beginning of the first step and persist
+until a later order replaces them, but they are not achieved instantly. Actual
+values transit toward them at published fictional rates, and the two are always
+reported separately. Depth rate is proportional to actual speed, because a
+submarine changes depth with planes: coming shallow quickly also means going
+fast, and therefore being loud. A commanded operating mode takes effect only
+once actual speed and depth satisfy that mode's limits.
+
+An activity waits on achieved settings rather than ordered ones. Mast and link
+cycles need the whole five-minute step inside the mast envelope; repair credits
+only the minutes actually spent within its speed limit. An interrupt returns
+control without altering the commanded settings, and reports what was achieved
+against what was ordered.
+
+The engine supplies no default for any order field. An unstated duration, depth,
+course, speed, plant lineup or interrupt policy is a rejected order, not an
+assumed one: the engine must never choose a setting the captain did not state.
+
+Opposing entities are not rate-limited in this rules version. Their settings
+still change only at five-minute boundaries, and the capability report says so.
 Acoustic integration runs during every complete step, concurrently with movement
 and the selected equipment activity, and reports at its endpoint. An active pulse
 occupies the first integration step. Mast observation and each link attempt are
