@@ -43,7 +43,7 @@ class EngineTests(unittest.TestCase):
             view = e.apply_order(self.game, self.order(id=f"p{i}", minutes=15))
             def scan(obj):
                 if isinstance(obj, dict):
-                    self.assertFalse(set(obj) & {"seed", "actors", "actor", "kind", "spec", "rng_trace", "initial_state", "intent", "last_heard", "aware", "bearing_bias", "bulletins", "radio_reliability"})
+                    self.assertFalse(set(obj) & {"seed", "actors", "actor", "kind", "spec", "rng_trace", "initial_state", "intent", "last_heard", "aware", "bearing_bias", "bulletins", "radio_reliability", "true"})
                     for value in obj.values():
                         scan(value)
                 elif isinstance(obj, list):
@@ -384,12 +384,12 @@ class EngineTests(unittest.TestCase):
         """Observation must read the depth the boat reached, not the one ordered.
 
         Both worlds end the step at 850 feet. One was ordered to 60 feet, on
-        the far side of the layer, and got 50 feet of it at 2 knots. If the
+        the far side of the mixed layer, and got 50 feet of it at 2 knots. If the
         engine credited the ordered depth the two would diverge.
         """
         ordered_shallow = e.initialize("ab" * 32)
         held_deep = e.initialize("ab" * 32)
-        layer = held_deep["state"]["layer"]
+        layer = held_deep["state"]["environment"]["true"]["mixed_layer_depth_feet"]
         common = dict(activity="listen", minutes=5, interrupt_on=[], course=90,
                       speed=2, operating_mode="standard")
         for game, depth in ((ordered_shallow, 60), (held_deep, 850)):
@@ -403,6 +403,48 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(
             [r["text"] for r in ordered_shallow["state"]["reports"] if r["department"] == "Sonar"],
             [r["text"] for r in held_deep["state"]["reports"] if r["department"] == "Sonar"])
+
+    def test_public_environment_is_the_dated_estimate(self):
+        from submarine_command import acoustics
+        view = e.public_view(self.game)
+        public = view["acoustic_environment"]
+        measured = self.game["state"]["environment"]["measured"]
+        self.assertNotIn("true", public)
+        self.assertEqual(
+            public["estimated_mixed_layer_depth_feet"],
+            round(measured["mixed_layer_depth_feet"], 1),
+        )
+        self.assertEqual(
+            public["sound_speed_profile"],
+            acoustics.public_environment(self.game["state"]["environment"], 0)["sound_speed_profile"],
+        )
+        hidden = copy.deepcopy(self.game)
+        hidden["state"]["environment"]["true"]["water_depth_feet"] = 1234.56789
+        self.assertNotIn("1234.56789", json.dumps(e.public_view(hidden)))
+        self.assertGreater(public["profile_age_minutes"], 0)
+        e.apply_order(self.game, self.order(id="age", minutes=20))
+        aged = e.public_view(self.game)["acoustic_environment"]["profile_age_minutes"]
+        self.assertAlmostEqual(aged, public["profile_age_minutes"] + 20)
+
+    def test_receiver_depth_changes_signal_excess_in_the_shared_column(self):
+        from submarine_command import acoustics
+        state = copy.deepcopy(self.game["state"])
+        actor = state["actors"][0]
+        actor.update(x=6.0, y=0.0, depth=60.0)
+        layer = state["environment"]["true"]["mixed_layer_depth_feet"]
+        in_layer = min(80.0, max(40.0, layer * 0.4))
+        below = min(850.0, layer + 250.0)
+        state["own"]["depth"] = in_layer
+        shallow, _ = e.reception_signal_excess(state, actor, state["own"])
+        state["own"]["depth"] = below
+        deep, own_loss = e.reception_signal_excess(state, actor, state["own"])
+        self.assertNotAlmostEqual(shallow, deep)
+        frequency = acoustics.representative_frequency_hz(e.contact_kind(actor))
+        swapped = acoustics.transmission_loss(
+            state["environment"]["true"], e.distance(state["own"], actor),
+            actor["depth"], state["own"]["depth"], frequency,
+        )
+        self.assertAlmostEqual(own_loss.transmission_loss_db, swapped.transmission_loss_db)
 
     # --- audit invariants ---
 

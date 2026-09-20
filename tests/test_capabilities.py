@@ -57,7 +57,15 @@ class CapabilityTests(unittest.TestCase):
     def test_unimplemented_capabilities_are_explicit(self):
         public = KESTREL.public_capabilities()
         self.assertFalse(public["sonar"]["towed_array_modeled"])
-        self.assertFalse(public["environment"]["convergence_zone_modeled"])
+        self.assertTrue(public["environment"]["full_sound_speed_profile_modeled"])
+        self.assertTrue(public["environment"]["convergence_zone_modeled"])
+        self.assertTrue(public["environment"]["bottom_bounce_modeled"])
+        self.assertTrue(public["environment"]["half_channel_modeled"])
+        self.assertFalse(public["environment"]["ray_solver_modeled"])
+        self.assertEqual(
+            public["environment"]["path_status"],
+            ["supported", "uncertain", "outside_scope"],
+        )
         self.assertFalse(public["weapons"]["employment_modeled"])
         self.assertFalse(public["measurements"]["numeric_narrowband_frequencies"])
 

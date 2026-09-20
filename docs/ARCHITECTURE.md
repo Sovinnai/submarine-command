@@ -14,12 +14,14 @@
 | Debrief | Revealed initial state, rules version, action log and outcome analysis | Full history only after the exercise ends and reveal is requested |
 
 The current implementation combines most engine responsibilities in engine.py.
-Immutable entity definitions, observation-derived calculations and process
-locking are separate modules. Vessel and biologic definitions use the same
-geometry, motion, operating-mode and signature contract. Optional resource,
+The acoustic water column and transmission-loss approximations live in
+acoustics.py. Immutable entity definitions, observation-derived calculations and
+process locking are separate modules. Vessel and biologic definitions use the
+same geometry, motion, operating-mode and signature contract. Optional resource,
 equipment and inventory components prevent biologics from acquiring meaningless
 vessel systems. docs/DESIGN.md defines the intended gameplay and abstraction
-contract.
+contract; docs/ACOUSTICS.md records the transmission model, units and
+assumptions.
 
 ## Randomness
 
@@ -54,7 +56,10 @@ retains shell access under the same account remains policy-only isolation.
 - One generic acoustic receiver with automatic track/cross-sensor association.
 - Own-ship turn, acceleration and depth rates resolved on one-minute increments;
   opposing entities change settings at five-minute boundaries without transients.
-- Simplified range attenuation and layer loss instead of path-dependent propagation.
+- Closed-form path approximations (direct, surface duct, half-channel, single
+  bottom bounce, first CZ) rather than a ray or PE solver; each path is
+  supported, uncertain or outside the model's scope.
+- Representative frequencies per contact domain rather than numeric spectra.
 - Categorical signature evidence rather than numeric narrowband spectra.
 - Crew disagreement from different priors applied to shared evidence.
 - Descriptive endpoint bearing drift rather than a TMA fit or statistical solution.

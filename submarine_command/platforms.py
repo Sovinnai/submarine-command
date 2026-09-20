@@ -8,6 +8,8 @@ those components.
 from dataclasses import asdict, dataclass
 from enum import Enum
 
+from .acoustics import capability_environment
+
 
 class EntityCategory(str, Enum):
     SSN = "nuclear_attack_submarine"
@@ -278,15 +280,7 @@ class EntitySpec:
                     "submerged_reception_modeled": False,
                     "buoyant_array_modeled": False,
                 },
-                "environment": {
-                    "implemented": (
-                        "Uncertain layer depth and a simplified loss across the layer."
-                    ),
-                    "full_sound_speed_profile_modeled": False,
-                    "convergence_zone_modeled": False,
-                    "bottom_bounce_modeled": False,
-                    "half_channel_modeled": False,
-                },
+                "environment": capability_environment(),
                 "weapons": {
                     "loadout_modeled": True,
                     "employment_modeled": False,
