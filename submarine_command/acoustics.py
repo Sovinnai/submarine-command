@@ -58,6 +58,9 @@ MIXED_LAYER_DROP_M_S = 1.5
 DUCT_MIN_THICKNESS_M = 10.0
 DUCT_MIN_CONTRAST_M_S = 2.0
 CZ_WIDTH_FRACTION = 0.08
+CONJUGATE_MIN_EXCURSION_M = 50.0
+MIN_CZ_RANGE_M = 15.0 * METERS_PER_NAUTICAL_MILE
+CZ_SCOPE_DEPTH_FEET = (60.0, 80.0, 150.0, 250.0, 400.0, 600.0, 900.0)
 MIN_GRAZING_FOR_BOUNCE_DEG = 3.0
 SPREADING_TRANSITION_FLOOR_M = 10.0
 
@@ -276,26 +279,28 @@ def profile_structure(ssp, mixed_layer_m, thermocline_base_m, water_depth_m):
 
 
 def conjugate_depth_m(ssp, structure, sound_speed):
-    """Deepest depth below the axis at which sound speed reaches `sound_speed`."""
+    """Deep turning depth where sound speed returns to `sound_speed`.
+
+    First-CZ conjugates lie on the deep side of the channel axis, not on the
+    same branch as a source already below the axis, and not at the axis itself.
+    """
     if sound_speed > structure["bottom_speed"] + 0.05:
         return None
-    below_axis = [
-        point for point in ssp if point["depth_m"] >= structure["axis_m"] - 1e-6
-    ]
-    if not below_axis:
-        return None
-    previous = below_axis[0]
-    if previous["sound_speed_m_s"] >= sound_speed:
-        return previous["depth_m"]
-    for point in below_axis[1:]:
-        if point["sound_speed_m_s"] >= sound_speed:
-            span = point["sound_speed_m_s"] - previous["sound_speed_m_s"]
-            if span <= 0:
-                return point["depth_m"]
-            fraction = (sound_speed - previous["sound_speed_m_s"]) / span
-            return previous["depth_m"] + fraction * (
-                point["depth_m"] - previous["depth_m"]
-            )
+    axis = structure["axis_m"]
+    previous = None
+    for point in ssp:
+        if previous is not None and point["depth_m"] >= axis + CONJUGATE_MIN_EXCURSION_M:
+            if point["sound_speed_m_s"] >= sound_speed:
+                span = point["sound_speed_m_s"] - previous["sound_speed_m_s"]
+                if span <= 0:
+                    found = point["depth_m"]
+                else:
+                    fraction = (sound_speed - previous["sound_speed_m_s"]) / span
+                    found = previous["depth_m"] + fraction * (
+                        point["depth_m"] - previous["depth_m"]
+                    )
+                if found >= axis + CONJUGATE_MIN_EXCURSION_M:
+                    return found
         previous = point
     return None
 
@@ -427,10 +432,17 @@ def _surface_duct_path(ssp, structure, range_m, source_m, receiver_m, frequency_
             PATH_SURFACE_DUCT, SUPPORTED, tl,
             "Both depths are in the mixed layer; cylindrical spreading after the layer-depth transition.",
         )
+    # Out-of-layer vertical is included in the path length so a leaky duct
+    # cannot beat the geometric slant at near-zero horizontal range.
+    coupling_m = max(0.0, source_m - thickness) + max(0.0, receiver_m - thickness)
+    path_length = math.hypot(range_m, coupling_m)
     leakage = 12.0 + 6.0 * math.log10(max(frequency_hz, cutoff) / cutoff)
+    tl = cylindrical_spreading_db(path_length, thickness) + _absorption(
+        frequency_hz, path_length
+    ) + leakage
     return PathResult(
-        PATH_SURFACE_DUCT, UNCERTAIN, tl + leakage,
-        "One depth is below the mixed layer; only leaky duct coupling is estimated.",
+        PATH_SURFACE_DUCT, UNCERTAIN, tl,
+        "One depth is below the mixed layer; leaky coupling includes the out-of-layer vertical.",
     )
 
 
@@ -523,6 +535,12 @@ def _cz_path(ssp, structure, range_m, source_m, receiver_m, frequency_hz):
             PATH_CONVERGENCE_ZONE, OUTSIDE_SCOPE, None,
             "No deep sound-channel axis; convergence-zone refraction is out of scope.",
         )
+    axis = structure["axis_m"]
+    if source_m >= axis or receiver_m >= axis:
+        return PathResult(
+            PATH_CONVERGENCE_ZONE, OUTSIDE_SCOPE, None,
+            "First-CZ approximation applies to source and receiver depths above the sound-channel axis.",
+        )
     source_c = interpolate_ssp(ssp, source_m)
     receiver_c = interpolate_ssp(ssp, receiver_m)
     source_conj = conjugate_depth_m(ssp, structure, source_c)
@@ -536,9 +554,14 @@ def _cz_path(ssp, structure, range_m, source_m, receiver_m, frequency_hz):
     c_mean = 0.5 * (source_c + receiver_c)
 
     def leg(delta_z):
-        return math.sqrt(max(0.0, 2.0 * c_mean * max(delta_z, 1.0) / g))
+        return math.sqrt(max(0.0, 2.0 * c_mean * delta_z / g))
 
     cz_range = leg(source_conj - source_m) + leg(receiver_conj - receiver_m)
+    if cz_range < MIN_CZ_RANGE_M:
+        return PathResult(
+            PATH_CONVERGENCE_ZONE, OUTSIDE_SCOPE, None,
+            "Turning range is too short for the first-CZ approximation.",
+        )
     width = CZ_WIDTH_FRACTION * cz_range + 0.3 * abs(source_m - receiver_m)
     offset = abs(range_m - cz_range)
     tl = spherical_spreading_db(range_m) + _absorption(frequency_hz, range_m) - 8.0
@@ -768,24 +791,54 @@ def profile_age_minutes(environment, elapsed_minutes):
     return environment["measured"]["age_at_elapsed_zero_minutes"] + elapsed_minutes
 
 
+def first_cz_range_m(ssp, structure, depth_m):
+    """Two-leg first-CZ range for a source and receiver at the same depth, or None."""
+    if depth_m >= structure["axis_m"] or depth_m >= structure["water_depth_m"]:
+        return None
+    speed = interpolate_ssp(ssp, depth_m)
+    conjugate = conjugate_depth_m(ssp, structure, speed)
+    if conjugate is None:
+        return None
+    delta = conjugate - depth_m
+    if delta <= 0:
+        return None
+    return 2.0 * math.sqrt(2.0 * speed * delta / structure["deep_gradient_s"])
+
+
+def cz_column_status(column):
+    """Whether first-CZ physics applies to some depth above the axis in this column."""
+    water_m = feet_to_meters(column["water_depth_feet"])
+    ssp = column["sound_speed_profile"]
+    structure = profile_structure(
+        ssp,
+        feet_to_meters(column["mixed_layer_depth_feet"]),
+        feet_to_meters(column["thermocline_base_feet"]),
+        water_m,
+    )
+    if structure["half_channel"] or structure["axis_m"] <= structure["mixed_layer_m"] + 5.0:
+        return OUTSIDE_SCOPE, "No deep sound-channel axis; convergence-zone refraction is out of scope."
+    depths = list(CZ_SCOPE_DEPTH_FEET) + [column["mixed_layer_depth_feet"]]
+    for depth_feet in depths:
+        cz_range = first_cz_range_m(ssp, structure, feet_to_meters(depth_feet))
+        if cz_range is not None and cz_range >= MIN_CZ_RANGE_M:
+            return SUPPORTED, (
+                "A conjugate depth exists for some depths above the axis; "
+                "CZ is evaluated only inside its annulus."
+            )
+    return OUTSIDE_SCOPE, "No first-CZ turning range for depths above the sound-channel axis."
+
+
 def path_scope_from_environment(column, frequency_hz=120.0):
     """Describe which path families the model will evaluate for this column.
 
     Uses the supplied column, which must be the measured estimate when shown
     to the captain. Geometry-specific support still depends on range and the
-    two depths.
+    two depths. CZ family scope is taken over patrol-relevant depths above the
+    axis, not a single probe depth.
     """
     mixed = max(column["mixed_layer_depth_feet"] * 0.5, 20.0)
     probe = transmission_loss(column, 8.0, mixed, mixed, frequency_hz)
-    cz_probe = transmission_loss(column, 32.0, 80.0, 80.0, frequency_hz)
-    cz = next(path for path in cz_probe.paths if path.path == PATH_CONVERGENCE_ZONE)
-    if "annulus" in cz.reason:
-        cz_status, cz_reason = SUPPORTED, (
-            "A conjugate depth exists in this estimated column; CZ is evaluated "
-            "only inside its annulus."
-        )
-    else:
-        cz_status, cz_reason = cz.status, cz.reason
+    cz_status, cz_reason = cz_column_status(column)
     scope = {
         path.path: {"status": path.status, "reason": path.reason}
         for path in probe.paths

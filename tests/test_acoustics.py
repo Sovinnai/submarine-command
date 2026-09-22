@@ -67,6 +67,16 @@ class SpreadingAndPathTests(unittest.TestCase):
         spherical_delta = a.spherical_spreading_db(a.nm_to_meters(20)) - a.spherical_spreading_db(a.nm_to_meters(5))
         self.assertLess(duct_f.transmission_loss_db - duct_n.transmission_loss_db, spherical_delta)
 
+    def test_leaky_duct_does_not_beat_geometry_at_zero_range(self):
+        column = summer_column()
+        layer = column["mixed_layer_depth_feet"]
+        result = a.transmission_loss(column, 0.0, 60, layer + 400, 400.0)
+        duct = next(p for p in result.paths if p.path == a.PATH_SURFACE_DUCT)
+        direct = next(p for p in result.paths if p.path == a.PATH_DIRECT)
+        self.assertEqual(duct.status, a.UNCERTAIN)
+        self.assertGreater(duct.transmission_loss_db, direct.transmission_loss_db)
+        self.assertNotEqual(result.selected_path, a.PATH_SURFACE_DUCT)
+
     def test_thermocline_crossing_raises_direct_loss(self):
         column = summer_column()
         layer = column["mixed_layer_depth_feet"]
@@ -123,6 +133,61 @@ class SpreadingAndPathTests(unittest.TestCase):
         cz_far = next(p for p in far.paths if p.path == a.PATH_CONVERGENCE_ZONE)
         self.assertEqual(cz_in.status, a.SUPPORTED)
         self.assertEqual(cz_far.status, a.OUTSIDE_SCOPE)
+
+    def test_source_below_the_axis_is_not_a_first_cz(self):
+        column = a.deep_water_test_environment()
+        axis_feet = column["thermocline_base_feet"]
+        below = min(axis_feet + 400, column["water_depth_feet"] - 100)
+        result = a.transmission_loss(column, 0.4, below, below, 120.0)
+        cz = next(p for p in result.paths if p.path == a.PATH_CONVERGENCE_ZONE)
+        self.assertEqual(cz.status, a.OUTSIDE_SCOPE)
+        self.assertIsNone(cz.transmission_loss_db)
+        self.assertIn("axis", cz.reason.lower())
+
+    def test_cz_column_scope_uses_depths_above_the_axis(self):
+        """A warm mixed layer can lack a conjugate at 80 feet while a deeper
+        in-envelope depth still has one. Public scope must not use only 80 feet.
+        """
+        column = a.deep_water_test_environment(
+            mixed_layer_feet=80,
+            thermocline_base_feet=600,
+            surface_c=26.0,
+            deep_c=4.0,
+        )
+        shallow = a.transmission_loss(column, 32.0, 80, 80, 120.0)
+        deeper = a.transmission_loss(column, 32.0, 400, 400, 120.0)
+        cz_80 = next(p for p in shallow.paths if p.path == a.PATH_CONVERGENCE_ZONE)
+        cz_400 = next(p for p in deeper.paths if p.path == a.PATH_CONVERGENCE_ZONE)
+        self.assertEqual(cz_80.status, a.OUTSIDE_SCOPE)
+        self.assertIn(cz_400.status, {a.SUPPORTED, a.UNCERTAIN, a.OUTSIDE_SCOPE})
+        status, reason = a.cz_column_status(column)
+        self.assertEqual(status, a.SUPPORTED)
+        self.assertIn("annulus", reason)
+        # Confirm 400 ft actually has a conjugate so the scope is not a false positive.
+        structure = a.profile_structure(
+            column["sound_speed_profile"],
+            a.feet_to_meters(column["mixed_layer_depth_feet"]),
+            a.feet_to_meters(column["thermocline_base_feet"]),
+            a.feet_to_meters(column["water_depth_feet"]),
+        )
+        self.assertIsNone(
+            a.conjugate_depth_m(
+                column["sound_speed_profile"],
+                structure,
+                a.interpolate_ssp(column["sound_speed_profile"], a.feet_to_meters(80)),
+            )
+        )
+        self.assertIsNotNone(
+            a.conjugate_depth_m(
+                column["sound_speed_profile"],
+                structure,
+                a.interpolate_ssp(column["sound_speed_profile"], a.feet_to_meters(400)),
+            )
+        )
+        self.assertGreaterEqual(
+            a.first_cz_range_m(column["sound_speed_profile"], structure, a.feet_to_meters(400)),
+            a.MIN_CZ_RANGE_M,
+        )
 
     def test_winter_column_supports_half_channel_not_a_summer_label(self):
         winter = a.winter_half_channel_environment()

@@ -67,7 +67,9 @@ treated as a clear detection.
 2 m/s of sound-speed drop into the thermocline, and a frequency at or above an
 idealized cutoff that falls as the layer thickens or the contrast grows. Both
 depths in the layer: cylindrical spreading after a transition equal to the layer
-depth. One depth below: leaky coupling, uncertain.
+depth. One depth below: leaky coupling whose path length includes the
+out-of-layer vertical, so a leak cannot beat the geometric slant at near-zero
+horizontal range.
 
 **Half-channel.** Only when sound speed increases through the whole column.
 Cylindrical spreading with water depth as the channel height. A summer
@@ -77,12 +79,16 @@ thermocline is outside this approximation's scope.
 Rayleigh interface loss and sediment loss. Very low grazing angles are
 uncertain because roughness is not modeled. Multiple bounces are not summed.
 
-**First convergence zone.** Only when a deep sound-channel axis exists and a
-conjugate depth for both source and receiver sound speeds lies in the water.
-Range is the constant-gradient turning identity
-`R = sqrt(2 c Δz / g)` from each depth to its conjugate, summed. Inside a
-fractional annulus the path is supported with a modest focusing credit; the
-edge is uncertain; other ranges and shallow columns are outside scope.
+**First convergence zone.** Only when a deep sound-channel axis exists, both
+depths are above that axis, and a conjugate depth on the deep branch exists for
+each sound speed. A match on the same deep branch, including a source already
+below the axis, is not a first CZ. Range is the constant-gradient turning
+identity `R = sqrt(2 c Δz / g)` from each depth to its conjugate, summed.
+Inside a fractional annulus the path is supported with a modest focusing
+credit; the edge is uncertain; other ranges, deep sources and shallow columns
+are outside scope. A turning range shorter than 15 nautical miles is not treated
+as a first CZ. The public column report asks whether any patrol-relevant depth
+above the axis has such a conjugate, not a single 80-foot probe.
 
 Thorp (1967) absorption is converted from dB/kyd to dB/km by 1.0936. The
 formula is used below 50 kHz, which covers the game's representative bands.
@@ -117,7 +123,12 @@ contact. Repeated looks inside that window are not independent evidence.
   at equal range.
 - Rock bottom bounce loses less than mud at the same grazing geometry.
 - Glass Strait water has no conjugate-depth CZ; a 4000 m test column does, near
-  the turning range.
+  the turning range, for depths above the axis.
+- A source or receiver below the sound-channel axis is not given a first-CZ path.
+- Public CZ scope follows whether any patrol-relevant depth above the axis has
+  a conjugate, not a single 80-foot probe.
+- Leaky duct coupling includes the out-of-layer vertical and does not beat the
+  geometric slant at near-zero horizontal range.
 - A winter isothermal column supports half-channel spreading; a summer
   thermocline does not.
 - Transmission loss is reciprocal in source and receiver depth.
