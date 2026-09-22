@@ -16,6 +16,7 @@ import secrets
 import sys
 import tempfile
 
+from . import acoustics
 from .locking import session_lock
 from .observations import observed_bearing_drift
 from .platforms import (
@@ -30,7 +31,7 @@ from .platforms import (
     public_entity_catalog,
 )
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 TICK = 5
 MANEUVER_STEP = 1
 END = 290
@@ -80,12 +81,12 @@ COMMAND_CONTRACT = {
     },
     "concurrency": {
         "maneuver": "Commanded course, speed, depth, and operating mode take effect at the start of the first five-minute step as standing settings. Actual values then transit toward them at the published rates while own ship and opposing platforms move over the same elapsed step.",
-        "observation": "Passive or focused acoustic integration occupies each complete five-minute step and runs concurrently with movement and the selected equipment activity. Results are reported at the step endpoint.",
+        "observation": "Passive or focused acoustic integration occupies each complete five-minute step and runs concurrently with movement and the selected equipment activity. Reception uses the hidden sound-speed profile, water depth and bottom at the source and receiver depths actually held; results are reported at the step endpoint.",
         "active": "The active transmission and its observation integration occupy the first five-minute step; later requested steps revert to passive observation.",
         "mast": "Mast deployment, visual observation, and recovery form a five-minute cycle concurrent with movement. The cycle requires the whole five minutes inside the published mast depth and speed envelope; a step spent transiting toward mast depth defers it and reports the achieved and commanded settings. Results are available at the step endpoint.",
         "communications": "Each receive or transmit link attempt occupies one five-minute step, includes mast deployment and recovery, and runs concurrently with movement and passive observation. Like mast observation, an attempt requires the whole step inside the mast envelope; steps spent reaching it are deferred and reported. A usable receive link or acknowledged transmission completes the task; a failed link may be retried in a later step unless selected as an interrupt.",
         "repair": "Repair needs 20 productive minutes at no more than the published repair speed. Only the minutes actually spent at or below that speed count, so a step spent decelerating earns partial credit. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
-        "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. The mode's published speed limit is its only resolved effect on own ship in this rules version. Own-ship radiated noise and opposing detection are not derived from the operating mode, so selecting a quieter plant state carries no direct counter-detection benefit beyond the speed it permits.",
+        "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. The mode's published speed limit is its only resolved effect on own ship in this rules version. Own-ship radiated noise is not derived from the operating mode, so selecting a quieter plant state carries no direct counter-detection benefit beyond the speed it permits. Opposing detection uses own-ship speed, the shared transmission-loss model, receiver depth and active transmission.",
     },
     "order_fields": {
         "required": ["id", "expected_turn", "activity", "minutes", "course", "speed", "depth", "operating_mode", "interrupt_on"],
@@ -390,22 +391,73 @@ def assessments(track):
     return result
 
 
+def acoustic_window_db(state, dice):
+    """One correlated quality draw per 20-minute window, applied to every contact."""
+    quality = dice.between(f"acoustic-window:{state['t'] // 20}", 0.55, 1.15)
+    return 10.0 * math.log10(quality)
+
+
+def _focus_directivity_db(state, actor, mode):
+    if mode != "focus":
+        return 0.0
+    track_match = next((tr for tr in state["tracks"] if tr["actor"] == actor["id"]), None)
+    if track_match and track_match["id"] == state["focus"]:
+        return 2.0
+    return -2.0
+
+
+def reception_signal_excess(state, source, receiver, mode="passive", extra_di=0.0):
+    """Signal excess through the hidden column at the depths actually held."""
+    own = state["own"]
+    listening_own_ship = receiver.get("id") == own.get("id")
+    pump = bool(state.get("pump_fault")) if listening_own_ship else False
+    if mode == "active":
+        contact = source if source.get("id") != own.get("id") else receiver
+        frequency = acoustics.ACTIVE_FREQUENCY_HZ
+        array = acoustics.receiving_array(own)
+        loss = acoustics.transmission_loss(
+            state["environment"]["true"],
+            distance(own, contact),
+            own["depth"],
+            contact["depth"],
+            frequency,
+        )
+        excess = acoustics.signal_excess_db(
+            acoustics.ACTIVE_SOURCE_LEVEL_DB,
+            loss.transmission_loss_db,
+            acoustics.noise_level_db(frequency, own["speed"], pump),
+            array["directivity_index_db"] + extra_di,
+            acoustics.ACTIVE_DT_DB,
+            two_way=True,
+            target_strength=acoustics.target_strength_db(contact_kind(contact)),
+        )
+        return excess, loss
+    frequency = acoustics.representative_frequency_hz(contact_kind(source))
+    array = acoustics.receiving_array(receiver)
+    loss = acoustics.transmission_loss(
+        state["environment"]["true"],
+        distance(source, receiver),
+        source["depth"],
+        array["depth_feet"],
+        frequency,
+    )
+    excess = acoustics.signal_excess_db(
+        acoustics.source_level_db(contact_kind(source), entity_noise(source)),
+        loss.transmission_loss_db,
+        acoustics.noise_level_db(frequency, receiver["speed"], pump),
+        array["directivity_index_db"] + extra_di,
+        acoustics.PASSIVE_DT_DB,
+    )
+    return excess, loss
+
+
 def observe_contact(state, actor, dice, mode="passive", opening=False):
     own, t = state["own"], state["t"]
-    delta = distance(own, actor)
     window = t // 20
-    quality = dice.between(f"acoustic-window:{window}", 0.55, 1.15)
-    across = (own["depth"] > state["layer"]) != (actor["depth"] > state["layer"])
-    noise = max(0.24, 1 - max(0, own["speed"] - 5) * 0.055)
-    if state["pump_fault"]:
-        noise *= 0.68
-    if mode == "focus":
-        track_match = next((tr for tr in state["tracks"] if tr["actor"] == actor["id"]), None)
-        noise *= 1.25 if track_match and track_match["id"] == state["focus"] else 0.78
-    audibility = entity_noise(actor) * quality * noise * (0.55 if across else 1)
-    probability = min(0.97, max(0.015, audibility * math.exp(-delta / 8)))
-    if mode == "active":
-        probability = min(0.97, 1.35 * math.exp(-delta / 17))
+    extra_di = _focus_directivity_db(state, actor, mode)
+    excess, _loss = reception_signal_excess(state, actor, own, mode, extra_di)
+    excess += acoustic_window_db(state, dice)
+    probability = acoustics.detection_probability(excess)
     if not opening and dice.u(f"detect:{actor['id']}:{t}:{mode}") >= probability:
         return
     track = next((tr for tr in state["tracks"] if tr["actor"] == actor["id"]), None)
@@ -424,12 +476,14 @@ def observe_contact(state, actor, dice, mode="passive", opening=False):
         cue = dice.choose(f"signature:{actor['id']}:{window}", list(CUES), [CUES[key][i] for key in CUES])
         # One evidence contribution per acoustic window; repeated looks do not compound confidence.
         track["evidence"].setdefault(str(window), cue)
-    strength = "strong" if audibility / max(delta, 1) > 0.25 else "moderate" if audibility / max(delta, 1) > 0.10 else "weak"
+    strength = acoustics.reception_strength(excess)
     obs = {"time": clock(t), "elapsed_minutes": t, "bearing_true": round(measured) % 360,
            "own_east_nm": round(own["x"], 3), "own_north_nm": round(own["y"], 3),
+           "own_depth_feet": round(own["depth"], 2),
            "source": mode, "strength": strength, "description": CUE_TEXT[cue],
            "range_estimate_nm": None, "evidence_window": f"A{window:03d}"}
     if mode == "active":
+        delta = distance(own, actor)
         obs["range_estimate_nm"] = round(max(0.1, delta * dice.between(f"active-range:{actor['id']}:{t}", 0.88, 1.12)), 1)
     track["observations"].append(obs)
     report(state, "Sonar", f"{track['id']}: bearing {obs['bearing_true']:03d} true, {strength} reception. {obs['description']}",
@@ -450,7 +504,7 @@ def new_world(seed):
              "ended": False, "end_reason": None, "deadline_announced": False,
              "maneuvering": False, "last_action_report_start": 0}
     dice = Dice(seed, state["rng_trace"])
-    state["layer"] = dice.between("initial:layer", 260, 350)
+    state["environment"] = acoustics.initialize_environment(dice)
     state["bearing_bias"] = dice.between("initial:bearing-bias", -2, 2)
     state["equipment_susceptibility"] = dice.between("initial:equipment", 0.4, 1.6)
     state["radio_reliability"] = dice.between("initial:radio", 0.58, 0.94)
@@ -527,7 +581,7 @@ def new_world(seed):
         {"id": "OPS-0510", "available": 120, "text": "0510 operations update: assessment deadline 0730 and relief station time 0800 remain unchanged. Commercial schedules are incomplete; absence from the list does not establish military identity."},
     ]
     report(state, "Navigation", "0310. Local position (0 east, 0 north). Course 090, speed 5 knots, depth 400 feet. RELIEF lies 24 nautical miles east.")
-    report(state, "Environment", "Last onboard profile places the principal acoustic layer somewhere between 250 and 375 feet. Conditions are variable.")
+    report(state, "Environment", acoustics.environment_report_text(state["environment"]))
     report(state, "Engineering", "Propulsion, sonar, communications and the auxiliary plant are available.")
     observe_contact(state, primary, dice, opening=True)
     return state
@@ -550,10 +604,31 @@ def opponent_step(state, actor, dice, active):
     ):
         return
     own, t = state["own"], state["t"]
-    gap = distance(own, actor)
-    probability = min(0.70, (0.04 + max(0, own["speed"] - 4) * 0.025) * math.exp(-gap / 10))
-    if active:
-        probability = min(0.98, 1.5 * math.exp(-gap / 20))
+    frequency = acoustics.representative_frequency_hz(
+        "submerged", "active" if active else "passive"
+    )
+    array = acoustics.receiving_array(actor)
+    loss = acoustics.transmission_loss(
+        state["environment"]["true"],
+        distance(own, actor),
+        own["depth"],
+        array["depth_feet"],
+        frequency,
+    )
+    source_level = acoustics.own_ship_source_level_db(own["speed"], active=active)
+    noise = acoustics.noise_level_db(
+        frequency, actor["speed"], baseline=acoustics.OPPONENT_AMBIENT_NL_AT_1KHZ_DB
+    )
+    excess = acoustics.signal_excess_db(
+        source_level,
+        loss.transmission_loss_db,
+        noise,
+        acoustics.OPPONENT_DIRECTIVITY_DB,
+        acoustics.OPPONENT_DT_DB,
+    )
+    probability = acoustics.detection_probability(
+        excess, ceiling=0.70 if not active else 0.98
+    )
     if dice.u(f"opponent-hears:{actor['id']}:{t}") < probability:
         actor["aware"] = True
         actor["last_heard"] = {"x": own["x"] + dice.between(f"opponent-fix-x:{t}", -2, 2),
@@ -831,9 +906,10 @@ def capability_report():
             "radiated_noise_modeled": False,
             "description": (
                 "An operating mode caps own-ship speed and is reported, but "
-                "own-ship radiated noise and opposing detection are not yet "
-                "derived from it. Opposing detection uses own-ship speed, range "
-                "and active transmission only."
+                "own-ship radiated noise is not yet derived from the plant "
+                "mode. Opposing detection uses own-ship speed, the shared "
+                "transmission-loss model, receiver depth, range and active "
+                "transmission."
             ),
         },
         "maneuver_transients": {
@@ -903,6 +979,9 @@ def public_view(game):
             "contacts": tracks, "transmitted_assessments": copy.deepcopy(state["sent"]),
             "reports_this_turn": copy.deepcopy(state["reports"][state["last_action_report_start"]:]),
             "report_count": len(state["reports"]),
+            "acoustic_environment": acoustics.public_environment(
+                state["environment"], state["t"]
+            ),
             "last_execution": copy.deepcopy(game["events"][-1]["execution"]) if game["events"] else None}
 
 
