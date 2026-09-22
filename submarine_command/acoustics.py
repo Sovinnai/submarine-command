@@ -648,7 +648,8 @@ def signal_excess_db(source_level, loss, noise_level, directivity, threshold, tw
     return source_level - spreading + target_strength - noise_level + directivity - threshold
 
 
-def detection_probability(signal_excess, floor=0.015, ceiling=0.97, scale_db=4.0):
+def detection_probability(signal_excess, floor=0.0, ceiling=0.97, scale_db=4.0):
+    """Logistic of signal excess. There is no independent miss/hit floor."""
     probability = 1.0 / (1.0 + math.exp(-signal_excess / scale_db))
     return min(ceiling, max(floor, probability))
 

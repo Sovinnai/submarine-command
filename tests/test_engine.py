@@ -553,11 +553,11 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(before, (actor["course"], actor["speed"]))
         self.assertFalse(actor["aware"])
 
-    def test_opponent_detection_has_no_probability_floor(self):
-        """A draw that would beat the 1.5% listen floor is not a detection at range."""
+    def test_detection_has_no_probability_floor(self):
+        """Inaudible geometry cannot still produce a real detection."""
         from submarine_command import acoustics
-        self.assertEqual(acoustics.detection_probability(-80.0), 0.015)
-        self.assertLess(acoustics.detection_probability(-80.0, floor=0.0, ceiling=0.70), 1e-6)
+        self.assertLess(acoustics.detection_probability(-80.0), 1e-6)
+        self.assertLess(acoustics.detection_probability(-80.0, ceiling=0.70), 1e-6)
         state = copy.deepcopy(self.game["state"])
         actor = e.make_entity(
             DART,
@@ -583,6 +583,14 @@ class EngineTests(unittest.TestCase):
             e.opponent_step(state, actor, FloorDraw(), False)
         self.assertFalse(actor["aware"])
         self.assertIsNone(actor["last_heard"])
+
+        listening = copy.deepcopy(self.game["state"])
+        primary = listening["actors"][0]
+        before = len(listening["tracks"][0]["observations"])
+        with mock.patch.object(e, "reception_signal_excess", return_value=(-80.0, None)):
+            with mock.patch.object(e, "acoustic_window_db", return_value=0.0):
+                e.observe_contact(listening, primary, FloorDraw())
+        self.assertEqual(len(listening["tracks"][0]["observations"]), before)
 
     def test_every_world_actor_uses_registered_components_and_valid_geometry(self):
         state = self.game["state"]

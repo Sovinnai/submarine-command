@@ -90,9 +90,11 @@ formula is used below 50 kHz, which covers the game's representative bands.
 ## Detection
 
 Passive signal excess is `SL − TL − NL + DI − DT`. Active is two-way TL plus a
-fictional target strength. Source levels and thresholds are published fictional
-game parameters. Representative frequencies are 120 Hz submerged, 80 Hz surface,
-2500 Hz biologic and 3500 Hz active, until numeric spectra exist.
+fictional target strength. Detection probability is the logistic of that excess
+with a published ceiling and no independent floor, so inaudible geometry does
+not still produce a contact. Source levels and thresholds are published
+fictional game parameters. Representative frequencies are 120 Hz submerged,
+80 Hz surface, 2500 Hz biologic and 3500 Hz active, until numeric spectra exist.
 
 Receiver depth is the platform's present keel depth. Changing depth changes
 loss through this same environment. A towed array is inventory only.
