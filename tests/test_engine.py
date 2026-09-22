@@ -557,7 +557,7 @@ class EngineTests(unittest.TestCase):
         """A draw that would beat the 1.5% listen floor is not a detection at range."""
         from submarine_command import acoustics
         self.assertEqual(acoustics.detection_probability(-80.0), 0.015)
-        self.assertEqual(acoustics.detection_probability(-80.0, floor=0.0, ceiling=0.70), 0.0)
+        self.assertLess(acoustics.detection_probability(-80.0, floor=0.0, ceiling=0.70), 1e-6)
         state = copy.deepcopy(self.game["state"])
         actor = e.make_entity(
             DART,

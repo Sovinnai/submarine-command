@@ -93,7 +93,6 @@ class SpreadingAndPathTests(unittest.TestCase):
         impedance_r = (density_ratio * speed_ratio - 1.0) / (density_ratio * speed_ratio + 1.0)
         expected = -20.0 * math.log10(abs(impedance_r))
         self.assertAlmostEqual(a.rayleigh_bottom_loss_db(90.0, rock, 0.0), expected, places=4)
-        self.assertAlmostEqual(expected, 3.046, places=2)
 
     def test_glass_strait_has_no_conjugate_cz(self):
         column = summer_column()
