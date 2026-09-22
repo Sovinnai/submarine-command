@@ -86,6 +86,15 @@ class SpreadingAndPathTests(unittest.TestCase):
         self.assertEqual(rock_path.status, a.SUPPORTED)
         self.assertGreater(mud_path.transmission_loss_db, rock_path.transmission_loss_db)
 
+    def test_rayleigh_normal_incidence_matches_impedance_form(self):
+        rock = a.BOTTOM_TYPES["rock"]
+        density_ratio = rock["density_ratio"]
+        speed_ratio = rock["sound_speed_ratio"]
+        impedance_r = (density_ratio * speed_ratio - 1.0) / (density_ratio * speed_ratio + 1.0)
+        expected = -20.0 * math.log10(abs(impedance_r))
+        self.assertAlmostEqual(a.rayleigh_bottom_loss_db(90.0, rock, 0.0), expected, places=4)
+        self.assertAlmostEqual(expected, 3.046, places=2)
+
     def test_glass_strait_has_no_conjugate_cz(self):
         column = summer_column()
         result = a.transmission_loss(column, 32.0, 80, 80, 120.0)

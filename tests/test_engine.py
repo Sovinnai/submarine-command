@@ -553,6 +553,37 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(before, (actor["course"], actor["speed"]))
         self.assertFalse(actor["aware"])
 
+    def test_opponent_detection_has_no_probability_floor(self):
+        """A draw that would beat the 1.5% listen floor is not a detection at range."""
+        from submarine_command import acoustics
+        self.assertEqual(acoustics.detection_probability(-80.0), 0.015)
+        self.assertEqual(acoustics.detection_probability(-80.0, floor=0.0, ceiling=0.70), 0.0)
+        state = copy.deepcopy(self.game["state"])
+        actor = e.make_entity(
+            DART,
+            id="distant-diesel",
+            x=40,
+            y=0,
+            course=90,
+            speed=4,
+            depth=300,
+            aware=False,
+            last_heard=None,
+            evaded=False,
+        )
+
+        class FloorDraw:
+            def u(self, label):
+                return 0.001
+
+            def between(self, label, low, high):
+                return (low + high) / 2
+
+        with mock.patch.object(acoustics, "signal_excess_db", return_value=-80.0):
+            e.opponent_step(state, actor, FloorDraw(), False)
+        self.assertFalse(actor["aware"])
+        self.assertIsNone(actor["last_heard"])
+
     def test_every_world_actor_uses_registered_components_and_valid_geometry(self):
         state = self.game["state"]
         for entity in [state["own"], *state["actors"]]:

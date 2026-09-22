@@ -626,7 +626,9 @@ def opponent_step(state, actor, dice, active):
         acoustics.OPPONENT_DIRECTIVITY_DB,
         acoustics.OPPONENT_DT_DB,
     )
-    probability = acoustics.detection_probability(excess, ceiling=0.70 if not active else 0.98)
+    probability = acoustics.detection_probability(
+        excess, floor=0.0, ceiling=0.70 if not active else 0.98
+    )
     if dice.u(f"opponent-hears:{actor['id']}:{t}") < probability:
         actor["aware"] = True
         actor["last_heard"] = {"x": own["x"] + dice.between(f"opponent-fix-x:{t}", -2, 2),

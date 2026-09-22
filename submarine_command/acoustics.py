@@ -457,20 +457,27 @@ def _half_channel_path(ssp, structure, range_m, source_m, receiver_m, frequency_
 
 
 def rayleigh_bottom_loss_db(grazing_deg, bottom, frequency_hz):
-    """Positive loss from a two-fluid Rayleigh coefficient plus sediment absorption."""
+    """Positive loss from a two-fluid Rayleigh coefficient plus sediment absorption.
+
+    `transmitted` is the transmitted vertical slowness
+    sqrt((c1/c2)² − cos² γ). The matching numerator/denominator term is the
+    density ratio times sin γ, not impedance times slowness. At normal
+    incidence this is (Z2 − Z1)/(Z2 + Z1) = (ρ2 c2 − ρ1 c1)/(ρ2 c2 + ρ1 c1).
+    """
     grazing = max(math.radians(grazing_deg), 1e-4)
     c_ratio = bottom["sound_speed_ratio"]
-    z_ratio = bottom["density_ratio"] * c_ratio
+    density_ratio = bottom["density_ratio"]
     argument = (1.0 / c_ratio) ** 2 - math.cos(grazing) ** 2
     if argument < 0:
         reflection = 1.0
     else:
         transmitted = math.sqrt(argument)
-        denom = z_ratio * math.sin(grazing) + transmitted
+        vertical = density_ratio * math.sin(grazing)
+        denom = vertical + transmitted
         if denom == 0:
             reflection = 1.0
         else:
-            reflection = abs((z_ratio * math.sin(grazing) - transmitted) / denom)
+            reflection = abs((vertical - transmitted) / denom)
     reflection = min(1.0, max(1e-6, reflection))
     interface = -20.0 * math.log10(reflection)
     sediment = bottom["attenuation_db_per_khz"] * (frequency_hz / 1000.0) / max(

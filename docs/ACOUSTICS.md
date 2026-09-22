@@ -44,7 +44,9 @@ too shallow for a conjugate-depth convergence zone.
 
 Bottom types are `mud`, `sand` and `rock` with documented sound-speed ratio,
 density ratio and a fictional frequency-dependent sediment loss. Reflection uses
-a two-fluid Rayleigh coefficient. Grazing angle is from the horizontal.
+a two-fluid Rayleigh pressure coefficient: density ratio times `sin γ` against
+the transmitted vertical slowness `sqrt((c1/c2)² − cos² γ)`. Grazing angle `γ`
+is from the horizontal. At normal incidence this is `(Z2 − Z1)/(Z2 + Z1)`.
 
 The onboard estimate is the same kind of column with temperature and layer-depth
 error, a rounded charted depth, and a charted bottom that is usually but not
