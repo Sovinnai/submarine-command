@@ -67,7 +67,12 @@ class CapabilityTests(unittest.TestCase):
             ["supported", "uncertain", "outside_scope"],
         )
         self.assertFalse(public["weapons"]["employment_modeled"])
-        self.assertFalse(public["measurements"]["numeric_narrowband_frequencies"])
+        self.assertTrue(public["measurements"]["numeric_narrowband_frequencies"])
+        self.assertTrue(public["sonar"]["spectral_frequencies_modeled"])
+        model = engine.capability_report()["narrowband_model"]
+        self.assertFalse(model["identity_lookup"])
+        self.assertIn("SL - TL - NL + DI - DT", model["signal_excess"])
+        self.assertNotIn("fundamental_hz", json.dumps(model))
 
     def test_catalog_defines_every_requested_entity_category(self):
         self.assertEqual(

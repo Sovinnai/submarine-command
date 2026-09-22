@@ -10,9 +10,10 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.7.** The hidden-state and replay foundation
-works. Acoustic transmission now uses a documented sound-speed profile and path
-approximations; array geometry and numeric spectra are still simplified.
+**Status: early prototype, version 0.8.** The hidden-state and replay foundation
+works. Acoustic transmission uses a documented sound-speed profile and path
+approximations. Contact reports include measured narrowband frequencies, line
+quality and uncertainty. Array geometry is still simplified.
 Unsupported systems are explicitly identified in the capability report.
 
 ## Run it
@@ -159,7 +160,7 @@ verification. During active play, debrief refuses to reveal anything.
 | Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |
 | Maneuver | Ordered course, speed, depth and mode resolved over simulated time at published turn, acceleration and speed-proportional depth rates; achieved and ordered reported separately |
-| Sonar | Generic passive reception, focused analysis and active range measurement; signature cues are currently categorical |
+| Sonar | Generic passive reception, focused analysis, active range measurement, and numeric narrowband frequencies with quality and uncertainty |
 | Observations | Noisy bearings, timestamped own positions, measured bearing drift and correlated evidence windows |
 | Environment | Hidden sound-speed profile, water depth and bottom; dated onboard estimate; frequency-dependent path approximations |
 | Communications | Mast receive/transmit with persistent link conditions |
@@ -178,6 +179,7 @@ be invented by the narrator to answer a question or resolve an order.
 - [Game design](docs/DESIGN.md): turn-based play and idealized physical quantities.
 - [Architecture](docs/ARCHITECTURE.md): truth, beliefs, observations and audit boundaries.
 - [Acoustic environment](docs/ACOUSTICS.md): sound-speed profile, path approximations, units and recorded assumptions.
+- [Narrowband spectra](docs/SPECTRA.md): persistent emitter lines, operating-state rules and noisy frequency measurements.
 - [Narrator protocol](docs/NARRATOR_PROTOCOL.md): restricted operations and deployment boundary.
 - [GitHub issues](https://github.com/Sovinnai/submarine-command/issues): all development tasks, priorities and acceptance criteria.
 - [Working agreement](AGENTS.md): implementation and narration invariants.

@@ -261,6 +261,7 @@ class EntitySpec:
                     "implemented": [
                         "combined passive reception",
                         "focused contact analysis",
+                        "numeric narrowband frequency measurements",
                         "one active pulse with an imperfect range measurement",
                     ],
                     "inventory": [
@@ -268,7 +269,7 @@ class EntitySpec:
                     ],
                     "towed_array_modeled": False,
                     "separate_array_geometry_modeled": False,
-                    "spectral_frequencies_modeled": False,
+                    "spectral_frequencies_modeled": True,
                 },
                 "communications": {
                     "transmit": "mast only",
@@ -301,7 +302,7 @@ class EntitySpec:
                         "Endpoint change from recorded bearings, labeled as an "
                         "observation trend; not a target-motion solution."
                     ),
-                    "numeric_narrowband_frequencies": False,
+                    "numeric_narrowband_frequencies": True,
                 },
             }
         )

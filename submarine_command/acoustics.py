@@ -32,8 +32,9 @@ Deliberate simplifications
 --------------------------
 - Salinity is a uniform 35 PSU. A bathythermograph in this game measures
   temperature versus depth and computes sound speed from Mackenzie 1981.
-- One representative frequency is used per contact domain until numeric
-  spectra are modeled. The loss function itself accepts any frequency.
+- Contact reception uses the numeric spectrum in spectra.py. Path-scope
+  reports and opposing detection of own ship still use one representative
+  frequency per domain. The loss function itself accepts any frequency.
 - Direct, surface-duct, half-channel, single bottom-bounce and first-CZ paths
   are evaluated independently; the lowest-loss contributing path is used.
   Coherent summation, a full image series and a ray solver are out of scope.

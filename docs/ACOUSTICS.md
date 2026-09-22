@@ -1,11 +1,13 @@
 # Acoustic environment
 
-This is the implemented transmission model for rules version 0.7. It is
+This is the implemented transmission model for rules version 0.8. It is
 idealized physics for a turn-based game. It does not reproduce classified
 sonar performance or a research-grade ocean-acoustics solver.
 
 The engine module is `submarine_command.acoustics`. Own-ship reception and
-opposing detection call the same function on the same hidden water column.
+opposing detection call the same transmission-loss function on the same hidden
+water column. Numeric frequency measurements are documented in
+[Narrowband spectra](SPECTRA.md).
 
 ## What the captain can know
 
@@ -105,8 +107,11 @@ Passive signal excess is `SL − TL − NL + DI − DT`. Active is two-way TL pl
 fictional target strength. Detection probability is the logistic of that excess
 with a published ceiling and no independent floor, so inaudible geometry does
 not still produce a contact. Source levels and thresholds are published
-fictional game parameters. Representative frequencies are 120 Hz submerged,
-80 Hz surface, 2500 Hz biologic and 3500 Hz active, until numeric spectra exist.
+fictional game parameters. Own-ship contact reception evaluates that excess on
+each emitted line and analysis band; see [Narrowband spectra](SPECTRA.md).
+Path-scope reports and opposing detection of own ship still use representative
+frequencies: 120 Hz submerged, 80 Hz surface, 2500 Hz biologic and 3500 Hz
+active.
 
 Receiver depth is the platform's present keel depth. Changing depth changes
 loss through this same environment. A towed array is inventory only.

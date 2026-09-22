@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from submarine_command import engine as e
+from submarine_command import acoustics, engine as e
 from submarine_command.platforms import BIOLOGIC, DART, ENTITY_REGISTRY
 
 
@@ -43,7 +43,13 @@ class EngineTests(unittest.TestCase):
             view = e.apply_order(self.game, self.order(id=f"p{i}", minutes=15))
             def scan(obj):
                 if isinstance(obj, dict):
-                    self.assertFalse(set(obj) & {"seed", "actors", "actor", "kind", "spec", "rng_trace", "initial_state", "intent", "last_heard", "aware", "bearing_bias", "bulletins", "radio_reliability", "true"})
+                    self.assertFalse(set(obj) & {
+                        "seed", "actors", "actor", "kind", "spec", "rng_trace",
+                        "initial_state", "intent", "last_heard", "aware",
+                        "bearing_bias", "bulletins", "radio_reliability", "true",
+                        "signature", "listens", "emitted_hz", "offset_fraction",
+                        "family", "source_level_db", "detail",
+                    })
                     for value in obj.values():
                         scan(value)
                 elif isinstance(obj, list):
@@ -89,14 +95,21 @@ class EngineTests(unittest.TestCase):
         state["t"] = 5
         dice = e.Dice(self.game["seed"], state["rng_trace"])
         primary = state["actors"][0]
-        with mock.patch.object(e, "entity_noise", return_value=1000):
+        primary.update(x=0.4, y=0.0)
+        with mock.patch.object(acoustics, "detection_probability", return_value=0.99):
             for minute in (5, 10, 15):
                 state["t"] = minute
-                for _ in range(2):
-                    e.observe_contact(state, primary, dice)
+                before = len(state["tracks"][0]["observations"])
+                e.observe_contact(state, primary, dice)
+                self.assertEqual(len(state["tracks"][0]["observations"]), before + 1)
+                e.observe_contact(state, primary, dice)
+                self.assertEqual(len(state["tracks"][0]["observations"]), before + 1)
         track = state["tracks"][0]
         self.assertLessEqual(len(track["evidence"]), 1)
+        stored = track["observations"][-1]["spectrum"]
+        self.assertEqual(stored, track["observations"][-1]["spectrum"])
         self.assertTrue(all(0 <= ob["bearing_true"] < 360 for ob in track["observations"]))
+        self.assertTrue(all("emitted_hz" not in line for ob in track["observations"] for line in ob["spectrum"]["lines"]))
 
     def test_full_replay_with_radio_maneuvers_and_early_interrupts(self):
         actions = [self.order(id="a", activity="focus", focus="S01", minutes=30, interrupt_on=["new_contact"]),
@@ -276,7 +289,7 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(published["speed_limit_enforced"])
         self.assertFalse(published["radiated_noise_modeled"])
         contract = e.COMMAND_CONTRACT["concurrency"]["operating_mode"]
-        self.assertIn("not derived from the operating mode", contract)
+        self.assertIn("opposing detection does not use that spectrum", contract)
 
     # --- envelope crossings ---
 
@@ -587,7 +600,7 @@ class EngineTests(unittest.TestCase):
         listening = copy.deepcopy(self.game["state"])
         primary = listening["actors"][0]
         before = len(listening["tracks"][0]["observations"])
-        with mock.patch.object(e, "reception_signal_excess", return_value=(-80.0, None)):
+        with mock.patch.object(acoustics, "signal_excess_db", return_value=-80.0):
             with mock.patch.object(e, "acoustic_window_db", return_value=0.0):
                 e.observe_contact(listening, primary, FloorDraw())
         self.assertEqual(len(listening["tracks"][0]["observations"]), before)
