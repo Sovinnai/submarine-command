@@ -77,6 +77,18 @@ class SpreadingAndPathTests(unittest.TestCase):
         self.assertGreater(duct.transmission_loss_db, direct.transmission_loss_db)
         self.assertNotEqual(result.selected_path, a.PATH_SURFACE_DUCT)
 
+    def test_in_layer_duct_includes_vertical_at_zero_range(self):
+        column = summer_column()
+        layer = column["mixed_layer_depth_feet"]
+        deep_in_layer = min(layer - 1.0, 150.0)
+        result = a.transmission_loss(column, 0.0, 60, deep_in_layer, 400.0)
+        duct = next(p for p in result.paths if p.path == a.PATH_SURFACE_DUCT)
+        direct = next(p for p in result.paths if p.path == a.PATH_DIRECT)
+        self.assertEqual(duct.status, a.SUPPORTED)
+        self.assertGreater(duct.transmission_loss_db, 20.0)
+        self.assertGreaterEqual(duct.transmission_loss_db, direct.transmission_loss_db - 0.5)
+        self.assertNotAlmostEqual(duct.transmission_loss_db, 0.0)
+
     def test_thermocline_crossing_raises_direct_loss(self):
         column = summer_column()
         layer = column["mixed_layer_depth_feet"]
@@ -247,6 +259,41 @@ class EnvironmentEstimateTests(unittest.TestCase):
             public["path_model"][a.PATH_CONVERGENCE_ZONE]["status"],
             a.OUTSIDE_SCOPE,
         )
+
+    def test_public_duct_scope_is_frequency_specific(self):
+        column = summer_column()
+        structure = a.profile_structure(
+            column["sound_speed_profile"],
+            a.feet_to_meters(column["mixed_layer_depth_feet"]),
+            a.feet_to_meters(column["thermocline_base_feet"]),
+            a.feet_to_meters(column["water_depth_feet"]),
+        )
+        cutoff = a.duct_cutoff_hz(structure["mixed_layer_m"], structure["duct_contrast_m_s"])
+        self.assertGreater(cutoff, 80.0)
+        self.assertLess(cutoff, 120.0)
+        environment = {
+            "true": a.winter_half_channel_environment(),
+            "measured": {
+                **column,
+                "age_at_elapsed_zero_minutes": 12,
+                "instrument": "test",
+            },
+        }
+        public = a.public_environment(environment, 0)
+        duct = public["path_model"][a.PATH_SURFACE_DUCT]
+        by_hz = {item["frequency_hz"]: item for item in duct["by_frequency"]}
+        self.assertEqual(by_hz[80.0]["status"], a.OUTSIDE_SCOPE)
+        self.assertEqual(by_hz[120.0]["status"], a.SUPPORTED)
+        self.assertEqual(by_hz[2500.0]["status"], a.SUPPORTED)
+        self.assertNotIn("status", duct)
+        self.assertAlmostEqual(duct["cutoff_hz"], round(cutoff, 1))
+        self.assertEqual(public["representative_frequencies_hz"]["surface"], 80.0)
+        self.assertEqual(public["representative_frequencies_hz"]["submerged"], 120.0)
+        self.assertEqual(public["representative_frequencies_hz"]["biologic"], 2500.0)
+        self.assertEqual(public["representative_frequencies_hz"]["active"], 3500.0)
+        text = a.environment_report_text(environment, 0)
+        self.assertIn("80 Hz surface", text)
+        self.assertIn("below cutoff", text)
 
     def test_public_path_model_does_not_use_the_true_column(self):
         environment = a.initialize_environment(Dice("cd" * 32, []))

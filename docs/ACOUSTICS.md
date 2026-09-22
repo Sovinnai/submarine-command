@@ -11,9 +11,11 @@ opposing detection call the same function on the same hidden water column.
 
 Public status reports a dated onboard estimate: a temperature-derived sound-speed
 profile, charted water depth, charted bottom type, mixed-layer and thermocline
-estimates, profile age, and which path families the model will evaluate for that
-estimate. Adjudication uses the hidden true column. Asking for the environment
-again does not create a new measurement.
+estimates, profile age, representative frequencies, and which path families the
+model will evaluate for that estimate. Surface-duct and half-channel support is
+listed at each representative frequency because cutoff is frequency-dependent.
+Adjudication uses the hidden true column. Asking for the environment again does
+not create a new measurement.
 
 There is no bathythermograph order in this rules version. Age increases with
 elapsed time.
@@ -67,9 +69,13 @@ treated as a clear detection.
 2 m/s of sound-speed drop into the thermocline, and a frequency at or above an
 idealized cutoff that falls as the layer thickens or the contrast grows. Both
 depths in the layer: cylindrical spreading after a transition equal to the layer
-depth. One depth below: leaky coupling whose path length includes the
-out-of-layer vertical, so a leak cannot beat the geometric slant at near-zero
-horizontal range.
+depth, with path length `sqrt(R² + (zr − zs)²)` so two in-layer depths at
+near-zero horizontal range cannot receive a 0 dB duct path. One depth below:
+leaky coupling whose path length includes the out-of-layer vertical, so a leak
+cannot beat the geometric slant at near-zero horizontal range. Public column
+scope reports that cutoff and the status at each representative frequency
+(80 Hz surface, 120 Hz submerged, 2500 Hz biologic, 3500 Hz active), not a
+single 120 Hz probe.
 
 **Half-channel.** Only when sound speed increases through the whole column.
 Cylindrical spreading with water depth as the channel height. A summer
@@ -129,6 +135,10 @@ contact. Repeated looks inside that window are not independent evidence.
   a conjugate, not a single 80-foot probe.
 - Leaky duct coupling includes the out-of-layer vertical and does not beat the
   geometric slant at near-zero horizontal range.
+- An in-layer duct at zero horizontal range includes the depth separation and
+  does not beat the geometric slant.
+- Public surface-duct scope is frequency-specific: a cutoff between 80 Hz and
+  120 Hz is outside scope for surface traffic and in scope for submerged.
 - A winter isothermal column supports half-channel spreading; a summer
   thermocline does not.
 - Transmission loss is reciprocal in source and receiver depth.

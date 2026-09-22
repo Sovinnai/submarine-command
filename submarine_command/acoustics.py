@@ -426,11 +426,16 @@ def _surface_duct_path(ssp, structure, range_m, source_m, receiver_m, frequency_
             PATH_SURFACE_DUCT, OUTSIDE_SCOPE, None,
             "Neither depth is in the mixed layer.",
         )
-    tl = cylindrical_spreading_db(range_m, thickness) + _absorption(frequency_hz, range_m)
     if both:
+        # In-layer vertical is in the path length so two depths at zero
+        # horizontal range cannot receive a 0 dB duct path.
+        path_length = math.hypot(range_m, abs(receiver_m - source_m))
+        tl = cylindrical_spreading_db(path_length, thickness) + _absorption(
+            frequency_hz, path_length
+        )
         return PathResult(
             PATH_SURFACE_DUCT, SUPPORTED, tl,
-            "Both depths are in the mixed layer; cylindrical spreading after the layer-depth transition.",
+            "Both depths are in the mixed layer; path length includes the in-layer vertical.",
         )
     # Out-of-layer vertical is included in the path length so a leaky duct
     # cannot beat the geometric slant at near-zero horizontal range.
@@ -628,6 +633,18 @@ def representative_frequency_hz(domain, mode="passive"):
     if mode == "active":
         return ACTIVE_FREQUENCY_HZ
     return REPRESENTATIVE_FREQUENCY_HZ[domain]
+
+
+def representative_probe_bands():
+    """Contact-domain frequencies used for adjudication, including active."""
+    bands = [
+        {"domain": domain, "frequency_hz": frequency, "mode": "passive"}
+        for domain, frequency in REPRESENTATIVE_FREQUENCY_HZ.items()
+    ]
+    bands.append(
+        {"domain": "active", "frequency_hz": ACTIVE_FREQUENCY_HZ, "mode": "active"}
+    )
+    return tuple(bands)
 
 
 def source_level_db(domain, relative_noise, mode="passive"):
@@ -828,22 +845,87 @@ def cz_column_status(column):
     return OUTSIDE_SCOPE, "No first-CZ turning range for depths above the sound-channel axis."
 
 
-def path_scope_from_environment(column, frequency_hz=120.0):
+def _column_structure(column):
+    water_m = feet_to_meters(column["water_depth_feet"])
+    ssp = column["sound_speed_profile"]
+    return profile_structure(
+        ssp,
+        feet_to_meters(column["mixed_layer_depth_feet"]),
+        feet_to_meters(column["thermocline_base_feet"]),
+        water_m,
+    )
+
+
+def _frequency_family_scope(column, family, probe_depth_feet):
+    """Evaluate one path family at each representative adjudication frequency."""
+    bands = []
+    for band in representative_probe_bands():
+        result = transmission_loss(
+            column, 8.0, probe_depth_feet, probe_depth_feet, band["frequency_hz"]
+        )
+        path = next(item for item in result.paths if item.path == family)
+        bands.append(
+            {
+                "domain": band["domain"],
+                "frequency_hz": band["frequency_hz"],
+                "status": path.status,
+                "reason": path.reason,
+            }
+        )
+    return bands
+
+
+def path_scope_from_environment(column, frequency_hz=None):
     """Describe which path families the model will evaluate for this column.
 
     Uses the supplied column, which must be the measured estimate when shown
     to the captain. Geometry-specific support still depends on range and the
     two depths. CZ family scope is taken over patrol-relevant depths above the
-    axis, not a single probe depth.
+    axis, not a single probe depth. Surface-duct and half-channel scope is
+    reported at each representative frequency because cutoff is frequency-
+    dependent; a single 120 Hz probe is not the published capability.
     """
     mixed = max(column["mixed_layer_depth_feet"] * 0.5, 20.0)
-    probe = transmission_loss(column, 8.0, mixed, mixed, frequency_hz)
+    geometry_hz = (
+        REPRESENTATIVE_FREQUENCY_HZ["submerged"] if frequency_hz is None else frequency_hz
+    )
+    probe = transmission_loss(column, 8.0, mixed, mixed, geometry_hz)
     cz_status, cz_reason = cz_column_status(column)
+    frequency_families = {PATH_SURFACE_DUCT, PATH_HALF_CHANNEL}
     scope = {
         path.path: {"status": path.status, "reason": path.reason}
         for path in probe.paths
-        if path.path != PATH_CONVERGENCE_ZONE
+        if path.path not in frequency_families and path.path != PATH_CONVERGENCE_ZONE
     }
+    structure = _column_structure(column)
+    duct = {"by_frequency": _frequency_family_scope(column, PATH_SURFACE_DUCT, mixed)}
+    if (
+        not structure["half_channel"]
+        and structure["mixed_layer_m"] >= DUCT_MIN_THICKNESS_M
+        and structure["duct_contrast_m_s"] >= DUCT_MIN_CONTRAST_M_S
+    ):
+        cutoff = duct_cutoff_hz(structure["mixed_layer_m"], structure["duct_contrast_m_s"])
+        duct["cutoff_hz"] = round(cutoff, 1)
+        duct["reason"] = (
+            f"Idealized mixed-layer cutoff is {cutoff:.0f} Hz; a surface-duct "
+            "path is in scope only at or above that frequency."
+        )
+    else:
+        duct["reason"] = duct["by_frequency"][0]["reason"]
+    scope[PATH_SURFACE_DUCT] = duct
+    half = {"by_frequency": _frequency_family_scope(column, PATH_HALF_CHANNEL, mixed)}
+    if structure["half_channel"]:
+        contrast = max(
+            structure["bottom_speed"] - structure["surface_speed"], DUCT_MIN_CONTRAST_M_S
+        )
+        cutoff = duct_cutoff_hz(structure["water_depth_m"], contrast)
+        half["cutoff_hz"] = round(cutoff, 1)
+        half["reason"] = (
+            f"Half-channel cutoff is {cutoff:.0f} Hz; trapping is leaky below that frequency."
+        )
+    else:
+        half["reason"] = half["by_frequency"][0]["reason"]
+    scope[PATH_HALF_CHANNEL] = half
     scope[PATH_CONVERGENCE_ZONE] = {"status": cz_status, "reason": cz_reason}
     return scope
 
@@ -852,6 +934,9 @@ def public_environment(environment, elapsed_minutes):
     measured = environment["measured"]
     age = profile_age_minutes(environment, elapsed_minutes)
     scope = path_scope_from_environment(measured)
+    frequencies = {
+        band["domain"]: band["frequency_hz"] for band in representative_probe_bands()
+    }
     return {
         "profile_age_minutes": round(age, 1),
         "measured_at": (
@@ -872,12 +957,32 @@ def public_environment(environment, elapsed_minutes):
             "source_level": SOURCE_REFERENCE,
             "noise_level": PRESSURE_REFERENCE,
         },
+        "representative_frequencies_hz": frequencies,
         "path_model": scope,
         "receiver": (
             "Hull array at present keel depth. Changing depth uses this same "
             "estimated column; the engine adjudicates with the hidden true column."
         ),
     }
+
+
+def _surface_duct_report_text(duct):
+    bands = duct.get("by_frequency") or []
+    if bands and all(band["status"] == OUTSIDE_SCOPE for band in bands):
+        return "Surface duct is outside the model's scope for the estimated column."
+    cutoff = duct.get("cutoff_hz")
+    if cutoff is None:
+        return ""
+    below = [band for band in bands if band["status"] == OUTSIDE_SCOPE]
+    if below:
+        labels = ", ".join(
+            f"{band['frequency_hz']:.0f} Hz {band['domain']}" for band in below
+        )
+        verb = "is" if len(below) == 1 else "are"
+        return (
+            f"Surface-duct cutoff near {cutoff:.0f} Hz; {labels} {verb} below cutoff."
+        )
+    return f"Surface-duct cutoff near {cutoff:.0f} Hz; representative bands are in scope."
 
 
 def environment_report_text(environment, elapsed_minutes=0):
@@ -888,12 +993,14 @@ def environment_report_text(environment, elapsed_minutes=0):
         if cz["status"] == OUTSIDE_SCOPE
         else "A first CZ annulus may exist in the estimated column."
     )
+    duct_text = _surface_duct_report_text(public["path_model"][PATH_SURFACE_DUCT])
+    extra = f" {duct_text}" if duct_text else ""
     return (
         f"Last onboard sound-speed profile is {public['profile_age_minutes']:.0f} minutes old. "
         f"Estimated mixed layer near {public['estimated_mixed_layer_depth_feet']:.0f} feet, "
         f"thermocline to about {public['estimated_thermocline_base_feet']:.0f} feet. "
         f"Charted water depth {public['charted_water_depth_feet']:.0f} feet, "
-        f"{public['charted_bottom']} bottom. {cz_text} "
+        f"{public['charted_bottom']} bottom. {cz_text}{extra} "
         "Conditions are an estimate, not a live measurement."
     )
 
