@@ -4,6 +4,8 @@ Bearing drift is a description of the measured bearings. The motion estimate
 is a separate constant-course grid fit to those bearings, their timestamps
 and provenance, and the own-ship positions recorded with them. Classification
 multiplies published priors by the spectral feature of each evidence window.
+A frequency-change indication compares successive measured lines after removing
+the own-ship Doppler implied by the recorded track. Aspect is not an input.
 """
 import math
 
@@ -32,6 +34,13 @@ BASELINE_DISTINCT_TIMES = 3
 NARROW_RANGE_RATIO = 1.5
 NARROW_SPEED_SPAN_KN = 3
 SUPERVISOR_SPEED_PRIOR_KN = 8
+SOUND_SPEED_MPS = 1500.0
+OPERATOR_SIGMA = 2.0
+SUPERVISOR_SIGMA = 3.0
+# Larger than a reversal at the published speed bounds, so a bigger fractional
+# shift is an emitted-frequency change rather than Doppler.
+DOPPLER_FRACTION_LIMIT = 0.03
+LINE_ASSOCIATION_FRACTION = 0.75
 _RANGE_INDEX = {value: index for index, value in enumerate(RANGE_GRID_NM)}
 _SPEED_INDEX = {value: index for index, value in enumerate(SPEED_GRID_KN)}
 
@@ -99,6 +108,40 @@ def classification_model():
             "latest measured spectrum in that window when a spectrum is present. "
             "The feature likelihoods multiply the role prior. A visual observation "
             "replaces that product for both roles. Both roles cite the same reports."
+        ),
+    }
+
+
+def frequency_change_model():
+    """Published rules for a crew indication that the contact's sound changed."""
+    return {
+        "modeled": True,
+        "hidden_motion_used": False,
+        "aspect_modeled": False,
+        "confirmed_maneuver": False,
+        "sound_speed_m_s": SOUND_SPEED_MPS,
+        "operator_sigma": OPERATOR_SIGMA,
+        "supervisor_sigma": SUPERVISOR_SIGMA,
+        "doppler_fraction_limit": DOPPLER_FRACTION_LIMIT,
+        "line_association_fraction": LINE_ASSOCIATION_FRACTION,
+        "correlation_window_minutes": spectra.CORRELATION_WINDOW_MINUTES,
+        "comparison": (
+            "Successive measured lines are matched in frequency order. The "
+            "frequency change is reduced by the own-ship closing-speed change "
+            f"implied by the recorded positions and bearings, at {SOUND_SPEED_MPS:g} m/s. "
+            "Inside one evidence window the shared frequency bias cancels. Across "
+            "a window boundary the full reported uncertainties apply, so a small "
+            "shift can stay inside the gate until a later look."
+        ),
+        "cue": (
+            "A residual inside the role's sigma gate is within error. A larger "
+            f"residual within {DOPPLER_FRACTION_LIMIT:.0%} of the line is a possible "
+            "range-rate change. A larger fraction is an emitted-frequency change, "
+            "such as blade rate or machinery, because it exceeds the Doppler bound."
+        ),
+        "aspect": (
+            "Received level does not depend on bow, beam, or stern aspect. "
+            "Quality is reported with the matched line and is not itself a zig call."
         ),
     }
 
@@ -873,6 +916,388 @@ def crew_classification(track, elapsed_minutes=None):
             "summary": (
                 "Both assessments use the same observations; they are not independent corroboration."
             ),
+            "competing_interpretations": notes,
+        },
+    }
+
+
+def _round_hz(value):
+    rounded = round(float(value), 3)
+    if rounded == 0:
+        return 0.0
+    return rounded
+
+
+def _spectrum_lines(observation):
+    spectrum = observation.get("spectrum")
+    if not isinstance(spectrum, dict):
+        return []
+    lines = []
+    for line in spectrum.get("lines") or []:
+        if not isinstance(line, dict):
+            continue
+        frequency = _number(line.get("measured_hz"))
+        uncertainty = _number(line.get("uncertainty_hz"))
+        if frequency is None or frequency <= 0 or uncertainty is None or uncertainty < 0:
+            continue
+        quality = line.get("quality") if line.get("quality") in ("weak", "moderate", "strong") else None
+        lines.append({
+            "measured_hz": frequency,
+            "uncertainty_hz": uncertainty,
+            "quality": quality,
+        })
+    lines.sort(key=lambda item: item["measured_hz"])
+    return lines
+
+
+def _frequency_samples(observations):
+    prepared = []
+    for obs in observations or []:
+        if not isinstance(obs, dict):
+            continue
+        elapsed = _number(obs.get("elapsed_minutes"))
+        if elapsed is None:
+            continue
+        lines = _spectrum_lines(obs)
+        if not lines:
+            continue
+        bearing = _number(obs.get("bearing_true"))
+        east = _number(obs.get("own_east_nm"))
+        north = _number(obs.get("own_north_nm"))
+        window = obs.get("evidence_window")
+        prepared.append({
+            "elapsed_minutes": elapsed,
+            "time": obs.get("time") if isinstance(obs.get("time"), str) else None,
+            "bearing_true": None if bearing is None else bearing % 360,
+            "own_east_nm": east,
+            "own_north_nm": north,
+            "evidence_window": window if isinstance(window, str) else None,
+            "report_id": obs.get("report_id") if isinstance(obs.get("report_id"), str) else None,
+            "lines": lines,
+        })
+    prepared.sort(key=lambda sample: (sample["elapsed_minutes"], sample["time"] or ""))
+    return prepared
+
+
+def _own_velocities(samples):
+    """Knots of own-ship travel on the segment that ends at each sample."""
+    velocities = [(0.0, 0.0) for _ in samples]
+    if len(samples) < 2:
+        return velocities
+    segments = []
+    for earlier, later in zip(samples, samples[1:]):
+        minutes = later["elapsed_minutes"] - earlier["elapsed_minutes"]
+        if minutes <= 0 or None in (
+            earlier["own_east_nm"], earlier["own_north_nm"],
+            later["own_east_nm"], later["own_north_nm"],
+        ):
+            segments.append(None)
+            continue
+        hours = minutes / 60.0
+        segments.append((
+            (later["own_east_nm"] - earlier["own_east_nm"]) / hours,
+            (later["own_north_nm"] - earlier["own_north_nm"]) / hours,
+        ))
+    velocities[0] = segments[0] if segments[0] is not None else (0.0, 0.0)
+    for index, segment in enumerate(segments):
+        velocities[index + 1] = segment if segment is not None else velocities[index]
+    return velocities
+
+
+def _closing_knots(velocity, bearing):
+    if velocity is None or bearing is None:
+        return None
+    east, north = velocity
+    radians = math.radians(bearing)
+    return east * math.sin(radians) + north * math.cos(radians)
+
+
+def _bias_sigma_hz(frequency):
+    return frequency * spectra.BIAS_FRACTION_BOUND / math.sqrt(3.0)
+
+
+def _motion_sigma_hz(frequency):
+    return (
+        frequency
+        * (spectra.MOTION_UNCERTAINTY_KNOTS * spectra.KNOTS_TO_METERS_PER_SECOND)
+        / SOUND_SPEED_MPS
+    )
+
+
+def _line_sigma_hz(uncertainty, frequency, same_window):
+    if not same_window:
+        return max(uncertainty, _motion_sigma_hz(frequency))
+    reduced = math.sqrt(max(uncertainty ** 2 - _bias_sigma_hz(frequency) ** 2, 0.0))
+    return max(reduced, _motion_sigma_hz(frequency))
+
+
+def _match_lines(earlier, later):
+    earlier = sorted(earlier, key=lambda line: line["measured_hz"])
+    later = sorted(later, key=lambda line: line["measured_hz"])
+
+    def within(left, right):
+        return abs(left["measured_hz"] - right["measured_hz"]) <= (
+            LINE_ASSOCIATION_FRACTION * min(left["measured_hz"], right["measured_hz"])
+        )
+
+    if earlier and len(earlier) == len(later) and all(
+        within(left, right) for left, right in zip(earlier, later)
+    ):
+        return list(zip(earlier, later)), 0, 0
+    pairs = sorted(
+        (
+            (abs(left["measured_hz"] - right["measured_hz"]), left_index, right_index)
+            for left_index, left in enumerate(earlier)
+            for right_index, right in enumerate(later)
+        ),
+        key=lambda item: item[0],
+    )
+    used_left, used_right = set(), set()
+    matched = []
+    for _difference, left_index, right_index in pairs:
+        if left_index in used_left or right_index in used_right:
+            continue
+        if not within(earlier[left_index], later[right_index]):
+            continue
+        used_left.add(left_index)
+        used_right.add(right_index)
+        matched.append((earlier[left_index], later[right_index]))
+    return matched, len(earlier) - len(used_left), len(later) - len(used_right)
+
+
+def _frequency_cue(sigma_ratio, fractional):
+    if sigma_ratio < OPERATOR_SIGMA:
+        return "within_error"
+    if fractional > DOPPLER_FRACTION_LIMIT:
+        return "emitted_frequency"
+    return "radial_rate"
+
+
+def _compare_spectra(earlier, later, earlier_velocity, later_velocity):
+    same_window = (
+        earlier["evidence_window"] is not None
+        and earlier["evidence_window"] == later["evidence_window"]
+    )
+    closing_earlier = _closing_knots(earlier_velocity, earlier["bearing_true"])
+    closing_later = _closing_knots(later_velocity, later["bearing_true"])
+    own_removed = closing_earlier is not None and closing_later is not None
+    closing_change = None if not own_removed else closing_later - closing_earlier
+    matched, unmatched_earlier, unmatched_later = _match_lines(earlier["lines"], later["lines"])
+    lines = []
+    for left, right in matched:
+        raw = right["measured_hz"] - left["measured_hz"]
+        if own_removed:
+            own_hz = left["measured_hz"] * (
+                closing_change * spectra.KNOTS_TO_METERS_PER_SECOND
+            ) / SOUND_SPEED_MPS
+        else:
+            own_hz = 0.0
+        residual = raw - own_hz
+        sigma = math.hypot(
+            _line_sigma_hz(left["uncertainty_hz"], left["measured_hz"], same_window),
+            _line_sigma_hz(right["uncertainty_hz"], right["measured_hz"], same_window),
+        )
+        ratio = abs(residual) / sigma if sigma > 0 else 0.0
+        fractional = abs(residual) / left["measured_hz"]
+        lines.append({
+            "from_hz": _round_hz(left["measured_hz"]),
+            "to_hz": _round_hz(right["measured_hz"]),
+            "uncertainty_from_hz": _round_hz(left["uncertainty_hz"]),
+            "uncertainty_to_hz": _round_hz(right["uncertainty_hz"]),
+            "raw_change_hz": _round_hz(raw),
+            "own_ship_doppler_hz": _round_hz(own_hz),
+            "residual_hz": _round_hz(residual),
+            "sigma_hz": _round_hz(sigma),
+            "sigma_ratio": _round_hz(ratio),
+            "fractional_residual": _round_hz(fractional),
+            "cue": _frequency_cue(ratio, fractional),
+            "quality_from": left["quality"],
+            "quality_to": right["quality"],
+            "_ratio": ratio,
+        })
+    return {
+        "from_report_id": earlier["report_id"],
+        "to_report_id": later["report_id"],
+        "from_time": earlier["time"],
+        "to_time": later["time"],
+        "from_elapsed_minutes": earlier["elapsed_minutes"],
+        "to_elapsed_minutes": later["elapsed_minutes"],
+        "same_evidence_window": same_window,
+        "own_ship_doppler_removed": own_removed,
+        "own_ship_closing_change_knots": None if closing_change is None else _round_hz(closing_change),
+        "matched_lines": lines,
+        "unmatched_earlier": unmatched_earlier,
+        "unmatched_later": unmatched_later,
+    }
+
+
+def _passing(comparison, threshold):
+    return [
+        line for line in comparison["matched_lines"]
+        if line["_ratio"] >= threshold
+    ]
+
+
+def _best_comparison(comparisons, threshold):
+    best = None
+    for comparison in comparisons:
+        passing = _passing(comparison, threshold)
+        if not passing:
+            continue
+        score = (max(line["_ratio"] for line in passing), len(passing))
+        if best is None or score > best[0]:
+            best = (score, comparison, passing)
+    return best
+
+
+def _confidence(passing):
+    emitted = any(line["cue"] == "emitted_frequency" for line in passing)
+    signs = []
+    for line in passing:
+        if line["residual_hz"] == 0:
+            continue
+        signs.append(1 if line["residual_hz"] > 0 else -1)
+    agree = len(passing) >= 2 and len(set(signs)) == 1
+    if emitted and agree:
+        return "high"
+    if emitted or agree:
+        return "moderate"
+    return "low"
+
+
+def _role_frequency(comparisons, threshold, label):
+    best = _best_comparison(comparisons, threshold)
+    if best is None:
+        return {
+            "indicated": False,
+            "confidence": "not_indicated",
+            "sigma_gate": threshold,
+            "supporting_reports": [],
+            "cue": None,
+            "reading": (
+                f"The {label} gate is {threshold:g} sigma. "
+                "No matched line exceeds it after own-ship motion is removed."
+            ),
+        }
+    _score, comparison, passing = best
+    confidence = _confidence(passing)
+    strongest = max(passing, key=lambda line: line["_ratio"])
+    reports = []
+    for report_id in (comparison["from_report_id"], comparison["to_report_id"]):
+        if report_id and report_id not in reports:
+            reports.append(report_id)
+    quality = ""
+    if strongest["quality_from"] and strongest["quality_to"] and strongest["quality_from"] != strongest["quality_to"]:
+        quality = (
+            f" Quality on that line changed from {strongest['quality_from']} "
+            f"to {strongest['quality_to']}."
+        )
+    cue = strongest["cue"]
+    return {
+        "indicated": True,
+        "confidence": confidence,
+        "sigma_gate": threshold,
+        "supporting_reports": reports,
+        "cue": cue,
+        "from_hz": strongest["from_hz"],
+        "to_hz": strongest["to_hz"],
+        "residual_hz": strongest["residual_hz"],
+        "sigma_ratio": strongest["sigma_ratio"],
+        "reading": (
+            f"The {label} {threshold:g}-sigma gate is met from {comparison['from_time']} "
+            f"to {comparison['to_time']}: {strongest['from_hz']} Hz to {strongest['to_hz']} Hz, "
+            f"residual {strongest['residual_hz']} Hz ({strongest['sigma_ratio']} sigma), "
+            f"read as {cue}.{quality} "
+            f"Supporting reports: {', '.join(reports) if reports else 'none'}."
+        ),
+    }
+
+
+def _strip_ratio(comparison):
+    public = dict(comparison)
+    public["matched_lines"] = [
+        {key: value for key, value in line.items() if key != "_ratio"}
+        for line in comparison["matched_lines"]
+    ]
+    return public
+
+
+def frequency_change_assessment(observations, elapsed_minutes=None):
+    """Crew indication that measured frequencies changed beyond the error model.
+
+    Own-ship Doppler is taken from the recorded track. Hidden contact motion,
+    emitted frequency, and aspect are not read. A result can be indicated with
+    low confidence on one look and become clearer on a later look.
+    """
+    samples = _frequency_samples(observations)
+    velocities = _own_velocities(samples)
+    pairs = [(index, index + 1) for index in range(len(samples) - 1)]
+    if len(samples) > 2:
+        pairs.append((0, len(samples) - 1))
+    comparisons = [
+        _compare_spectra(samples[start], samples[end], velocities[start], velocities[end])
+        for start, end in pairs
+    ]
+    reviewed = []
+    stale = []
+    for sample in samples:
+        report_id = sample["report_id"]
+        if not report_id or report_id in reviewed:
+            continue
+        reviewed.append(report_id)
+        if elapsed_minutes is not None and elapsed_minutes - sample["elapsed_minutes"] >= STALE_MINUTES:
+            stale.append(report_id)
+    operator = _role_frequency(comparisons, OPERATOR_SIGMA, "operator")
+    supervisor = _role_frequency(comparisons, SUPERVISOR_SIGMA, "supervisor")
+    notes = [
+        "The indication uses measured frequencies and the recorded own-ship track. "
+        "It does not confirm a contact maneuver and it does not solve course or speed.",
+        "Received level does not depend on aspect, so a bow or beam turn is not a level cue here.",
+    ]
+    if operator["indicated"] and not supervisor["indicated"]:
+        notes.append(
+            "The operator's 2-sigma gate is met. The supervisor's 3-sigma gate is not. "
+            "Both roles use the same frequency residuals."
+        )
+    elif operator["indicated"] and supervisor["indicated"]:
+        notes.append(
+            "Both roles see a frequency change outside their gates on the same residuals."
+        )
+    elif not operator["indicated"]:
+        notes.append(
+            "Every matched frequency change lies inside both gates after own-ship motion is removed."
+        )
+    cues = {role["cue"] for role in (operator, supervisor) if role["cue"]}
+    if "emitted_frequency" in cues:
+        notes.append(
+            "At least one residual exceeds the 3 percent Doppler bound, so the emitted "
+            "frequency changed. Blade rate or machinery can do that."
+        )
+    elif "radial_rate" in cues:
+        notes.append(
+            "The residual is inside the 3 percent Doppler bound, so it can be a change in range rate."
+        )
+    if stale:
+        notes.append(
+            f"Reports {', '.join(stale)} are at least {STALE_MINUTES} minutes old. "
+            "They remain in the frequency history and are stale."
+        )
+    indicated = operator["indicated"] or supervisor["indicated"]
+    return {
+        "status": "indicated" if indicated else "not_indicated",
+        "confirmed_maneuver": False,
+        "assumptions": frequency_change_model(),
+        "measurements": {
+            "spectrum_count": len(samples),
+            "report_ids": reviewed,
+            "stale_report_ids": stale,
+        },
+        "comparisons": [_strip_ratio(comparison) for comparison in comparisons],
+        "crew": {
+            "shared_report_ids": reviewed,
+            "stale_report_ids": stale,
+            "operator": operator,
+            "supervisor": supervisor,
             "competing_interpretations": notes,
         },
     }

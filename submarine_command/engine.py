@@ -21,6 +21,8 @@ from .locking import session_lock
 from .observations import (
     classification_model,
     crew_classification,
+    frequency_change_assessment,
+    frequency_change_model,
     motion_model,
     observed_bearing_drift,
     target_motion_estimate,
@@ -37,7 +39,7 @@ from .platforms import (
     public_entity_catalog,
 )
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 TICK = 5
 MANEUVER_STEP = 1
 END = 290
@@ -963,6 +965,7 @@ def capability_report():
     result["narrowband_model"] = spectra.public_model()
     result["target_motion_model"] = motion_model()
     result["classification_model"] = classification_model()
+    result["frequency_change_model"] = frequency_change_model()
     return result
 
 
@@ -979,7 +982,8 @@ def public_view(game):
                        "assessments": assessments(tr, state["t"]), "visual": copy.deepcopy(tr["visual"]),
                        "observations": copy.deepcopy(tr["observations"]),
                        "observed_bearing_drift": observed_bearing_drift(tr["observations"]),
-                       "target_motion": target_motion_estimate(tr["observations"], state["t"])})
+                       "target_motion": target_motion_estimate(tr["observations"], state["t"]),
+                       "frequency_change": frequency_change_assessment(tr["observations"], state["t"])})
     return {"game": MISSION["title"], "version": VERSION, "turn": len(game["events"]),
             "time": clock(state["t"]), "elapsed_minutes": state["t"], "ended": state["ended"],
             "initial_commitment_sha256": game["commitment"], "turn_receipt_sha256": game["head"],

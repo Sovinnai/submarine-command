@@ -5,9 +5,12 @@ import unittest
 
 from submarine_command import engine
 from submarine_command.observations import (
+    SOUND_SPEED_MPS,
+    frequency_change_assessment,
     observed_bearing_drift,
     target_motion_estimate,
 )
+from submarine_command import spectra
 
 
 FORBIDDEN = {
@@ -354,6 +357,238 @@ class PublicContactTests(unittest.TestCase):
         self.assertFalse(model["hidden_motion_used"])
         self.assertFalse(model["confirmed_target_maneuver"])
         self.assertIn("target_motion", view["platform_capabilities"]["measurements"])
+        self.assertEqual(
+            contact["frequency_change"],
+            frequency_change_assessment(contact["observations"], view["elapsed_minutes"]),
+        )
+        change = contact["frequency_change"]
+        self.assertFalse(change["confirmed_maneuver"])
+        self.assertFalse(change["assumptions"]["hidden_motion_used"])
+        self.assertFalse(change["assumptions"]["aspect_modeled"])
+        self.assertEqual(change["assumptions"]["correlation_window_minutes"], 20)
+        self.assertEqual(change["assumptions"]["operator_sigma"], 2.0)
+        self.assertEqual(change["assumptions"]["supervisor_sigma"], 3.0)
+        if change["measurements"]["spectrum_count"] < 2:
+            self.assertEqual(change["status"], "not_indicated")
+        _scan(self, change)
+        self.assertNotIn("_ratio", json.dumps(change))
+        published = view["platform_capabilities"]["frequency_change_model"]
+        self.assertFalse(published["aspect_modeled"])
+        self.assertEqual(published["correlation_window_minutes"], spectra.CORRELATION_WINDOW_MINUTES)
+        self.assertEqual(spectra.CORRELATION_WINDOW_MINUTES, 20)
+        self.assertIn("frequency_change", view["platform_capabilities"]["measurements"])
+
+
+def _tone(frequency, quality="moderate", uncertainty=0.05):
+    return {"measured_hz": frequency, "uncertainty_hz": uncertainty, "quality": quality}
+
+
+def _look(minute, report, lines, window="W000", east=0.0, north=0.0, bearing=90.0):
+    return {
+        "elapsed_minutes": minute,
+        "time": f"t{minute}",
+        "bearing_true": bearing,
+        "own_east_nm": east,
+        "own_north_nm": north,
+        "evidence_window": window,
+        "report_id": report,
+        "spectrum": {"lines": lines},
+    }
+
+
+class FrequencyChangeTests(unittest.TestCase):
+    def test_same_window_shift_splits_the_two_sigma_gates(self):
+        observations = [
+            _look(0, "R1", [_tone(60.0, "moderate")]),
+            _look(5, "R2", [_tone(60.030, "weak")]),
+        ]
+        result = frequency_change_assessment(observations, 5)
+        operator = result["crew"]["operator"]
+        supervisor = result["crew"]["supervisor"]
+        self.assertEqual(result["status"], "indicated")
+        self.assertFalse(result["confirmed_maneuver"])
+        self.assertTrue(operator["indicated"])
+        self.assertFalse(supervisor["indicated"])
+        self.assertEqual(operator["cue"], "radial_rate")
+        self.assertEqual(operator["confidence"], "low")
+        self.assertEqual(operator["supporting_reports"], ["R1", "R2"])
+        self.assertEqual(supervisor["supporting_reports"], [])
+        line = result["comparisons"][0]["matched_lines"][0]
+        self.assertGreater(line["sigma_ratio"], 2)
+        self.assertLess(line["sigma_ratio"], 3)
+        self.assertEqual(line["cue"], "radial_rate")
+        self.assertTrue(result["comparisons"][0]["same_evidence_window"])
+        self.assertTrue(result["comparisons"][0]["own_ship_doppler_removed"])
+        self.assertAlmostEqual(result["comparisons"][0]["own_ship_closing_change_knots"], 0.0)
+        reading = operator["reading"]
+        self.assertIn("Quality on that line changed from moderate to weak", reading)
+        self.assertIn("2-sigma", " ".join(result["crew"]["competing_interpretations"]))
+        self.assertIn("3-sigma", " ".join(result["crew"]["competing_interpretations"]))
+        self.assertIn("aspect", " ".join(result["crew"]["competing_interpretations"]))
+        _scan(self, result)
+
+    def test_cross_window_shift_stays_inside_both_gates(self):
+        early = frequency_change_assessment([
+            _look(0, "R1", [_tone(60.0)], window="W000"),
+            _look(20, "R2", [_tone(60.030)], window="W001"),
+        ], 20)
+        self.assertEqual(early["status"], "not_indicated")
+        self.assertFalse(early["crew"]["operator"]["indicated"])
+        self.assertFalse(early["crew"]["supervisor"]["indicated"])
+        self.assertFalse(early["comparisons"][0]["same_evidence_window"])
+        self.assertLess(early["comparisons"][0]["matched_lines"][0]["sigma_ratio"], 2)
+        self.assertEqual(early["comparisons"][0]["matched_lines"][0]["cue"], "within_error")
+
+    def test_a_later_look_in_the_new_window_can_cross_the_higher_gate(self):
+        missed = [
+            _look(0, "R1", [_tone(60.0)], window="W000"),
+            _look(20, "R2", [_tone(60.030)], window="W001"),
+        ]
+        caught = missed + [_look(25, "R3", [_tone(60.075)], window="W001")]
+        before = frequency_change_assessment(missed, 20)
+        after = frequency_change_assessment(caught, 25)
+        self.assertEqual(before["status"], "not_indicated")
+        self.assertEqual(after["status"], "indicated")
+        self.assertTrue(after["crew"]["operator"]["indicated"])
+        self.assertTrue(after["crew"]["supervisor"]["indicated"])
+        self.assertEqual(after["crew"]["supervisor"]["cue"], "radial_rate")
+        self.assertEqual(after["crew"]["supervisor"]["confidence"], "low")
+        self.assertEqual(after["crew"]["operator"]["supporting_reports"], ["R2", "R3"])
+        self.assertEqual(after["crew"]["supervisor"]["supporting_reports"], ["R2", "R3"])
+        same_window = [
+            item for item in after["comparisons"] if item["same_evidence_window"]
+        ]
+        self.assertEqual(len(same_window), 1)
+        self.assertGreater(same_window[0]["matched_lines"][0]["sigma_ratio"], 3)
+        crossed = [
+            item for item in after["comparisons"] if not item["same_evidence_window"]
+        ]
+        self.assertTrue(all(line["cue"] == "within_error" for item in crossed for line in item["matched_lines"]))
+
+    def test_a_shift_inside_the_motion_floor_is_not_called(self):
+        result = frequency_change_assessment([
+            _look(0, "R1", [_tone(60.0)]),
+            _look(5, "R2", [_tone(60.005)]),
+        ], 5)
+        self.assertEqual(result["status"], "not_indicated")
+        self.assertEqual(result["crew"]["operator"]["confidence"], "not_indicated")
+        self.assertEqual(result["comparisons"][0]["matched_lines"][0]["cue"], "within_error")
+        self.assertIn("inside both gates", " ".join(result["crew"]["competing_interpretations"]))
+
+    def test_quality_alone_does_not_call_a_change(self):
+        result = frequency_change_assessment([
+            _look(0, "R1", [_tone(60.0, "moderate")]),
+            _look(5, "R2", [_tone(60.0, "strong")]),
+        ], 5)
+        self.assertEqual(result["status"], "not_indicated")
+        self.assertEqual(result["comparisons"][0]["matched_lines"][0]["residual_hz"], 0.0)
+        self.assertNotIn("Quality", result["crew"]["operator"]["reading"])
+
+    def test_harmonic_jump_is_an_emitted_frequency_change(self):
+        result = frequency_change_assessment([
+            _look(0, "R1", [_tone(11.2), _tone(22.4)]),
+            _look(5, "R2", [_tone(33.6), _tone(16.8)]),
+        ], 5)
+        pairs = [
+            (line["from_hz"], line["to_hz"])
+            for line in result["comparisons"][0]["matched_lines"]
+        ]
+        self.assertEqual(pairs, [(11.2, 16.8), (22.4, 33.6)])
+        self.assertEqual(result["comparisons"][0]["unmatched_earlier"], 0)
+        self.assertEqual(result["comparisons"][0]["unmatched_later"], 0)
+        self.assertTrue(all(line["cue"] == "emitted_frequency" for line in result["comparisons"][0]["matched_lines"]))
+        self.assertEqual(result["crew"]["operator"]["confidence"], "high")
+        self.assertEqual(result["crew"]["supervisor"]["confidence"], "high")
+        self.assertEqual(result["crew"]["operator"]["cue"], "emitted_frequency")
+        self.assertEqual(result["crew"]["supervisor"]["cue"], "emitted_frequency")
+        self.assertIn("emitted", " ".join(result["crew"]["competing_interpretations"]).lower())
+        single = frequency_change_assessment([
+            _look(0, "R1", [_tone(11.2)]),
+            _look(5, "R2", [_tone(16.8)]),
+        ], 5)
+        self.assertEqual(single["crew"]["operator"]["cue"], "emitted_frequency")
+        self.assertEqual(single["crew"]["operator"]["confidence"], "moderate")
+
+    def test_own_ship_doppler_is_removed_before_the_call(self):
+        closing = 10.0 * spectra.KNOTS_TO_METERS_PER_SECOND
+        shifted = 60.0 * (1.0 + closing / SOUND_SPEED_MPS)
+        east = 10.0 * 5.0 / 60.0
+        held = [
+            _look(0, "R1", [_tone(60.0)], east=0.0),
+            _look(5, "R2", [_tone(60.0)], east=0.0),
+            _look(10, "R3", [_tone(60.0)], east=east),
+        ]
+        followed = [
+            _look(0, "R1", [_tone(60.0)], east=0.0),
+            _look(5, "R2", [_tone(60.0)], east=0.0),
+            _look(10, "R3", [_tone(shifted)], east=east),
+        ]
+        compensated = frequency_change_assessment(followed, 10)
+        raw = frequency_change_assessment(held, 10)
+        self.assertEqual(compensated["status"], "not_indicated")
+        self.assertTrue(compensated["comparisons"][-1]["own_ship_doppler_removed"])
+        self.assertAlmostEqual(compensated["comparisons"][-1]["own_ship_closing_change_knots"], 10.0, places=3)
+        self.assertEqual(compensated["comparisons"][-1]["matched_lines"][0]["residual_hz"], 0.0)
+        self.assertEqual(raw["status"], "indicated")
+        self.assertTrue(raw["crew"]["supervisor"]["indicated"])
+        self.assertEqual(raw["crew"]["supervisor"]["cue"], "radial_rate")
+        self.assertLess(raw["comparisons"][-1]["matched_lines"][0]["residual_hz"], 0)
+        self.assertGreater(abs(raw["comparisons"][-1]["matched_lines"][0]["own_ship_doppler_hz"]), 0.1)
+
+    def test_hidden_fields_and_looks_without_lines_do_not_change_the_call(self):
+        clean = [
+            _look(0, "R1", [_tone(60.0)]),
+            {"elapsed_minutes": 3, "time": "t3", "bearing_true": 90, "report_id": "Rgap"},
+            _look(5, "R2", [_tone(60.030)]),
+        ]
+        poisoned = []
+        for observation in clean:
+            copy = dict(observation)
+            copy.update({
+                "course": 270,
+                "speed": 18,
+                "aspect": "bow",
+                "actor": "actor-a",
+                "kind": "submerged",
+                "emitted_hz": 12.0,
+                "true": {"course": 270},
+            })
+            spectrum = copy.get("spectrum")
+            if spectrum:
+                copy["spectrum"] = {
+                    "lines": [{**line, "emitted_hz": 59.0, "doppler_hz": 1.0, "aspect": "bow"} for line in spectrum["lines"]],
+                    "source_level_db": 140,
+                }
+            poisoned.append(copy)
+        self.assertEqual(
+            frequency_change_assessment(clean, 5),
+            frequency_change_assessment(poisoned, 5),
+        )
+        published = json.dumps(frequency_change_assessment(poisoned, 5))
+        self.assertNotIn("emitted_hz", published)
+        self.assertNotIn("actor-a", published)
+        _scan(self, frequency_change_assessment(poisoned, 5))
+
+    def test_stale_reports_remain_in_the_history(self):
+        result = frequency_change_assessment([
+            _look(0, "R1", [_tone(11.2)]),
+            _look(5, "R2", [_tone(16.8)]),
+        ], 40)
+        self.assertEqual(result["status"], "indicated")
+        self.assertEqual(result["measurements"]["report_ids"], ["R1", "R2"])
+        self.assertEqual(result["measurements"]["stale_report_ids"], ["R1", "R2"])
+        self.assertEqual(result["crew"]["stale_report_ids"], ["R1", "R2"])
+        self.assertIn("stale", " ".join(result["crew"]["competing_interpretations"]))
+
+    def test_one_spectrum_has_no_comparison(self):
+        result = frequency_change_assessment([
+            _look(0, "R1", [_tone(60.0)]),
+            {"elapsed_minutes": 5, "spectrum": {"lines": [{"measured_hz": "sixty"}]}},
+        ], 5)
+        self.assertEqual(result["status"], "not_indicated")
+        self.assertEqual(result["measurements"]["spectrum_count"], 1)
+        self.assertEqual(result["comparisons"], [])
+        self.assertFalse(result["confirmed_maneuver"])
 
 
 if __name__ == "__main__":

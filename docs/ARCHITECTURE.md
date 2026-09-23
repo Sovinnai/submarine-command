@@ -70,6 +70,9 @@ retains shell access under the same account remains policy-only isolation.
 - Bearings-only motion estimates use a constant-course grid and retain every
   acceptable solution. Endpoint bearing drift is a separate measurement. The
   estimate does not confirm a target maneuver from noise or own-ship motion.
+- Frequency-change indications compare measured lines after an own-ship Doppler
+  correction. They can be heard at 2 sigma and 3 sigma. Source level does not
+  depend on bow, beam, or stern aspect.
 - A short nuclear patrol with no modeled reactor endurance constraint; diesel
   battery and snorkeling tradeoffs use explicit fictional rates.
 - A single auxiliary fault, a simple opposing reaction and no weapons-resolution model.

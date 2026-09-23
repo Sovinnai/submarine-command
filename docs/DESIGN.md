@@ -23,7 +23,7 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
-In rules version 0.9, a command window is 5–60 minutes in five-minute increments.
+In rules version 0.10, a command window is 5–60 minutes in five-minute increments.
 Five minutes is the resolution at which the world reports and at which every
 random draw is keyed. Events are therefore located at step boundaries. Opposing
 decisions use start-of-step information, then every platform moves over the same
@@ -115,7 +115,7 @@ compensate for an unexpectedly successful decision.
 
 ## Target motion and crew assessments
 
-Rules version 0.9 estimates contact motion from recorded bearings, their
+Rules version 0.10 estimates contact motion from recorded bearings, their
 timestamps and provenance, and the own-ship positions stored with those
 bearings. The fit assumes constant course and speed on a published grid.
 Acoustic bearings share one bias. Measurements that share an evidence window
@@ -136,6 +136,16 @@ window's latest measured spectrum. The assessment cites the reports and the
 measured lines, uncertainties and qualities. Both roles cite that same set.
 A report at least 20 minutes old is marked stale and remains in the history.
 A visual observation replaces the acoustic update for both roles.
+
+A separate frequency indication compares successive measured lines. It removes
+the own-ship closing-speed change implied by the recorded positions and
+bearings. The operator calls a change at 2 sigma and the supervisor at 3 sigma,
+so one role can hear it before the other, and a later look can cross the higher
+gate. Inside one 20-minute evidence window the shared frequency bias cancels,
+which is why that window stays longer than the five-minute step: a new draw
+every step would hide a small shift. A residual inside the gate is not called.
+A residual larger than the published Doppler bound is read as an emitted-frequency
+change. Received level does not depend on bow, beam, or stern aspect.
 
 ## What makes a good session
 
