@@ -23,7 +23,7 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
-In rules version 0.9, a command window is 5–60 minutes in five-minute increments.
+In rules version 0.11, a command window is 5–60 minutes in five-minute increments.
 Five minutes is the resolution at which the world reports and at which every
 random draw is keyed. Events are therefore located at step boundaries. Opposing
 decisions use start-of-step information, then every platform moves over the same
@@ -122,6 +122,41 @@ evidence. All random outcomes can be replayed from the committed seed and orders
 The narrator interprets orders and presents evidence. It does not invent actual
 contact characteristics, silently choose favorable rolls, or add an enemy to
 compensate for an unexpectedly successful decision.
+
+## Target motion and crew assessments
+
+Rules version 0.11 estimates contact motion from recorded bearings, their
+timestamps and provenance, and the own-ship positions stored with those
+bearings. The fit assumes constant course and speed on a published grid.
+Acoustic bearings share one bias. Measurements that share an evidence window
+are not independent looks. An active range, when one was reported, constrains
+range by the published measurement factor. Every grid point that meets the
+error model stays in the family. The fit does not read hidden contact course,
+speed or position.
+
+Observed bearing drift remains a separate description of the measured bearing
+change over at most 30 minutes. A bearing change that own-ship motion and the
+stated measurement error can carry is not reported as a confirmed target
+maneuver. When no constant-motion solution fits, a maneuver is one competing
+explanation beside measurement error and contact misassociation.
+
+Classification multiplies each role's prior by the overlapping spectral
+feature recorded for each evidence window. The feature comes from the latest
+spectrum in that window that resolved one. The assessment cites that
+spectrum's reports and measured lines, uncertainties and qualities. Both
+roles cite that same set.
+A report at least 20 minutes old is marked stale and remains in the history.
+A visual observation replaces the acoustic update for both roles.
+
+A separate frequency indication compares successive measured lines. It removes
+the own-ship closing-speed change recorded as course and speed at each look.
+The operator calls a change at 2 sigma and the supervisor at 3 sigma, so one
+role can hear it before the other, and a later look can cross the higher
+gate. Inside one 20-minute evidence window the shared frequency bias and the
+reused per-line processing error cancel, which is why that window stays longer
+than the five-minute step: a new draw every step would hide a small shift. A
+residual inside the gate is not called. A residual larger than the published
+Doppler bound is read as an emitted-frequency change. Received level does not depend on bow, beam, or stern aspect.
 
 ## What makes a good session
 
