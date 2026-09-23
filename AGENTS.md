@@ -46,6 +46,8 @@ See docs/DESIGN.md for the design contract.
 - Do not add or run CI. In particular, do not add GitHub Actions workflows,
   scheduled jobs, or workflow dispatches. The user explicitly reserves Actions
   minutes for another project. Run necessary verification locally instead.
+- Open pull requests ready for review. Do not create draft pull requests. If a
+  pull request is still a draft, mark it ready for review.
 - Do not schedule recurring check-ins to poll a pull request. This repository
   runs no CI, and pull-request webhooks already wake a session on real activity,
   so a timer only burns context to re-read an unchanged PR. After opening a pull
