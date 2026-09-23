@@ -18,7 +18,13 @@ import tempfile
 
 from . import acoustics, spectra
 from .locking import session_lock
-from .observations import observed_bearing_drift
+from .observations import (
+    classification_model,
+    crew_classification,
+    motion_model,
+    observed_bearing_drift,
+    target_motion_estimate,
+)
 from .platforms import (
     BIOLOGIC,
     DART,
@@ -31,7 +37,7 @@ from .platforms import (
     public_entity_catalog,
 )
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 TICK = 5
 MANEUVER_STEP = 1
 END = 290
@@ -362,24 +368,13 @@ def report(state, department, text, category="routine", **extra):
     return entry
 
 
-def assessments(track):
-    result = {}
-    for role, prior in (("supervisor", (0.60, 0.30, 0.10)), ("operator", (0.35, 0.50, 0.15))):
-        probs = list(prior)
-        for evidence in track["evidence"].values():
-            like = spectra.FEATURE_LIKELIHOOD.get(evidence)
-            if like is None:
-                continue
-            probs = [a * b for a, b in zip(probs, like)]
-            total = sum(probs)
-            probs = [p / total for p in probs]
-        if track.get("visual"):
-            probs = [0.995, 0.003, 0.002]
-        best = max(range(3), key=lambda i: probs[i])
-        confidence = "high" if probs[best] >= 0.85 else "moderate" if probs[best] >= 0.65 else "low"
-        result[role] = {"favors": KINDS[best], "confidence": confidence}
-    result["evidence_relationship"] = "Both assessments use the same observations; they are not independent corroboration."
-    return result
+def assessments(track, elapsed_minutes=None):
+    """Crew classification from recorded evidence. Elapsed time marks stale reports."""
+    return crew_classification(track, elapsed_minutes)
+
+
+def _assessment_decision(role):
+    return role["favors"], role["confidence"]
 
 
 def acoustic_window_db(state, dice):
@@ -485,7 +480,7 @@ def observe_contact(state, actor, dice, mode="passive", opening=False):
                  "first": t, "last": t, "evidence": {}, "observations": [],
                  "visual": None, "listens": [_listen_key(t, mode)]}
         state["tracks"].append(track)
-    old_assessment = assessments(track)["supervisor"]
+    old_assessment = _assessment_decision(assessments(track, t)["supervisor"])
     track["last"] = t
     measured = measured_bearing
     # One evidence slot per acoustic window. A later look in that window may
@@ -510,11 +505,12 @@ def observe_contact(state, actor, dice, mode="passive", opening=False):
         delta = distance(own, actor)
         obs["range_estimate_nm"] = round(max(0.1, delta * dice.between(f"active-range:{actor['id']}:{t}", 0.88, 1.12)), 1)
     track["observations"].append(obs)
-    report(state, "Sonar", f"{track['id']}: bearing {obs['bearing_true']:03d} true, {strength} reception. {obs['description']}",
+    entry = report(state, "Sonar", f"{track['id']}: bearing {obs['bearing_true']:03d} true, {strength} reception. {obs['description']}",
            "new_contact" if new else "contact_update", contact=track["id"], observation=obs)
-    new_assessment = assessments(track)["supervisor"]
-    if not new and new_assessment["confidence"] == "high" and new_assessment != old_assessment:
-        report(state, "Sonar supervisor", f"{track['id']}: assessment now favors {new_assessment['favors']} with high confidence; this remains an assessment.", "classification_change", contact=track["id"])
+    obs["report_id"] = entry["id"]
+    new_assessment = _assessment_decision(assessments(track, t)["supervisor"])
+    if not new and new_assessment[1] == "high" and new_assessment != old_assessment:
+        report(state, "Sonar supervisor", f"{track['id']}: assessment now favors {new_assessment[0]} with high confidence; this remains an assessment.", "classification_change", contact=track["id"])
 
 
 def new_world(seed):
@@ -684,16 +680,19 @@ def mast_observations(state, dice):
             report(state, "Scope", f"New visual contact designated {track['id']}.", "new_contact")
         b = round((bearing(state["own"], actor) + dice.between(f"mast-bearing:{actor['id']}:{state['t']}", -2, 2)) % 360) % 360
         track["last"] = state["t"]
-        visual = {"time": clock(state["t"]), "bearing_true": b,
+        visual = {"time": clock(state["t"]), "elapsed_minutes": state["t"], "bearing_true": b,
                   "description": "Surface vessel observed; no military features resolved.",
                   "name_read": actor["name"] if gap < 2.5 else None}
         track["visual"] = visual
         obs = {"time": clock(state["t"]), "elapsed_minutes": state["t"], "bearing_true": b,
                "own_east_nm": round(state["own"]["x"], 3), "own_north_nm": round(state["own"]["y"], 3),
+               "own_depth_feet": round(state["own"]["depth"], 2),
                "source": "mast", "strength": "visual", "description": visual["description"],
                "range_estimate_nm": None, "evidence_window": None}
         track["observations"].append(obs)
-        report(state, "Scope", f"{track['id']}, bearing {b:03d}: {visual['description']}", "classification_change", contact=track["id"], visual=visual)
+        entry = report(state, "Scope", f"{track['id']}, bearing {b:03d}: {visual['description']}", "classification_change", contact=track["id"], visual=visual)
+        obs["report_id"] = entry["id"]
+        visual["report_id"] = entry["id"]
 
 
 def tick_world(state, dice, order, first_tick):
@@ -962,6 +961,8 @@ def capability_report():
         ),
     }
     result["narrowband_model"] = spectra.public_model()
+    result["target_motion_model"] = motion_model()
+    result["classification_model"] = classification_model()
     return result
 
 
@@ -975,10 +976,10 @@ def public_view(game):
     for tr in state["tracks"]:
         tracks.append({"id": tr["id"], "first_report": clock(tr["first"]), "last_report": clock(tr["last"]),
                        "status": "recent" if state["t"] - tr["last"] < 20 else "stale",
-                       "assessments": assessments(tr), "visual": copy.deepcopy(tr["visual"]),
+                       "assessments": assessments(tr, state["t"]), "visual": copy.deepcopy(tr["visual"]),
                        "observations": copy.deepcopy(tr["observations"]),
                        "observed_bearing_drift": observed_bearing_drift(tr["observations"]),
-                       "course_speed_solution": "Not established by the engine; use reported bearings and own-ship positions to assess possibilities."})
+                       "target_motion": target_motion_estimate(tr["observations"], state["t"])})
     return {"game": MISSION["title"], "version": VERSION, "turn": len(game["events"]),
             "time": clock(state["t"]), "elapsed_minutes": state["t"], "ended": state["ended"],
             "initial_commitment_sha256": game["commitment"], "turn_receipt_sha256": game["head"],

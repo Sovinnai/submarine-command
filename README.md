@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.8.** The hidden-state and replay foundation
+**Status: early prototype, version 0.9.** The hidden-state and replay foundation
 works. Acoustic transmission uses a documented sound-speed profile and path
 approximations. Contact reports include measured narrowband frequencies, line
 quality and uncertainty. Array geometry is still simplified.
@@ -161,7 +161,8 @@ verification. During active play, debrief refuses to reveal anything.
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |
 | Maneuver | Ordered course, speed, depth and mode resolved over simulated time at published turn, acceleration and speed-proportional depth rates; achieved and ordered reported separately |
 | Sonar | Generic passive reception, focused analysis, active range measurement, and numeric narrowband frequencies with quality and uncertainty |
-| Observations | Noisy bearings, timestamped own positions, measured bearing drift and correlated evidence windows |
+| Observations | Noisy bearings, timestamped own positions, measured bearing drift, and a separate constant-motion solution family |
+| Classification | Overlapping spectral features tied to measured lines, cited reports, and two priors |
 | Environment | Hidden sound-speed profile, water depth and bottom; dated onboard estimate; frequency-dependent path approximations |
 | Communications | Mast receive/transmit with persistent link conditions |
 | Opposition | Limited-information detection and a simple evasive response |

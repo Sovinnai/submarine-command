@@ -1,6 +1,6 @@
 # Narrowband spectra
 
-This is the frequency-measurement model for rules version 0.8. It uses the
+This is the frequency-measurement model for rules version 0.9. It uses the
 transmission-loss function in [Acoustic environment](ACOUSTICS.md). The values
 are fictional game parameters. The module is `submarine_command.spectra`.
 
@@ -103,7 +103,9 @@ fixed detection draw without becoming a new independent roll.
 
 The crew's belief update keeps one feature per window, taken from the latest
 look. A repeated look does not multiply that update. Two assessments of the
-same observations are not independent corroboration.
+same observations are not independent corroboration. The public assessment
+cites the report and the measured lines, uncertainties and qualities for that
+feature, and marks a report that is at least 20 minutes old.
 
 Re-reading status, history or an existing report performs no draw and cannot
 add a line.

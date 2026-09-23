@@ -65,8 +65,11 @@ retains shell access under the same account remains policy-only isolation.
   detection of own ship. Contact reception uses numeric narrowband spectra.
 - Opposing detection of own ship follows speed, not the narrowband signature
   or own-ship operating mode.
-- Crew disagreement from different priors applied to shared evidence.
-- Descriptive endpoint bearing drift rather than a TMA fit or statistical solution.
+- Crew assessments cite one shared set of reports. Disagreement is the two
+  priors applied to that evidence, including overlapping spectral features.
+- Bearings-only motion estimates use a constant-course grid and retain every
+  acceptable solution. Endpoint bearing drift is a separate measurement. The
+  estimate does not confirm a target maneuver from noise or own-ship motion.
 - A short nuclear patrol with no modeled reactor endurance constraint; diesel
   battery and snorkeling tradeoffs use explicit fictional rates.
 - A single auxiliary fault, a simple opposing reaction and no weapons-resolution model.
