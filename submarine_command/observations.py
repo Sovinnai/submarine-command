@@ -1150,7 +1150,7 @@ def _best_comparison(comparisons, threshold):
     return best
 
 
-def _confidence(passing):
+def _change_confidence(passing):
     emitted = any(line["cue"] == "emitted_frequency" for line in passing)
     signs = []
     for line in passing:
@@ -1180,7 +1180,7 @@ def _role_frequency(comparisons, threshold, label):
             ),
         }
     _score, comparison, passing = best
-    confidence = _confidence(passing)
+    confidence = _change_confidence(passing)
     strongest = max(passing, key=lambda line: line["_ratio"])
     reports = []
     for report_id in (comparison["from_report_id"], comparison["to_report_id"]):
