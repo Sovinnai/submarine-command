@@ -480,12 +480,18 @@ def window_fractional_bias(dice, elapsed_minutes):
 
 
 def line_error_sample(dice, emitter_id, line_id, elapsed_minutes):
-    """Processing-error sample in [-1, 1], fixed for the window and the line."""
-    return dice.between(
+    """Zero-mean unit-variance processing sample, fixed for one line and window.
+
+    The stored draw is uniform on [-1, 1]. That distribution has standard
+    deviation 1/sqrt(3), so the sample is scaled by sqrt(3). Multiplying the
+    result by the Cramér–Rao term then has the one-sigma width the report states.
+    """
+    uniform = dice.between(
         f"spectrum-line:{emitter_id}:{line_id}:{window_index(elapsed_minutes)}",
         -1.0,
         1.0,
     )
+    return uniform * math.sqrt(3.0)
 
 
 def horizontal_velocity_m_s(entity):
@@ -720,13 +726,14 @@ def _publish(detailed_lines, detailed_bands, emitted):
     detected_excess = [
         line["excess_db"] for line in detailed_lines if line["detected"]
     ] + [band["excess_db"] for band in detailed_bands if band["detected"]]
+    best_excess = max(detected_excess) if detected_excess else None
     return {
         "public": public,
         "feature": spectral_feature(public),
-        "any_detected": bool(detected_excess),
+        "any_detected": best_excess is not None,
+        "best_excess_db": best_excess,
         "strength": (
-            acoustics.reception_strength(max(detected_excess))
-            if detected_excess else "weak"
+            acoustics.reception_strength(best_excess) if best_excess is not None else "weak"
         ),
         "description": describe_spectrum(public),
         "detail": {
@@ -738,33 +745,49 @@ def _publish(detailed_lines, detailed_bands, emitted):
 
 
 def harmonic_relations(lines):
-    """Integer relations among measured lines, using reported uncertainty only."""
+    """Integer relations among measured lines, using reported uncertainty only.
+
+    Each detected line may be any harmonic from 1 through 8. Lines at 2f and 3f
+    therefore imply the missing fundamental. A relation that treats a detected
+    line as the fundamental is preferred when that simpler fit explains as many
+    lines.
+    """
     if len(lines) < 2:
         return []
     best = None
-    for index, fundamental in enumerate(lines):
-        base = fundamental["measured_hz"]
-        if base <= 0:
+    best_score = None
+    for line in lines:
+        if line["measured_hz"] <= 0:
             continue
-        matched = [1]
-        for other_index, other in enumerate(lines):
-            if other_index == index:
+        for harmonic_number in range(1, 9):
+            base = line["measured_hz"] / harmonic_number
+            base_uncertainty = line["uncertainty_hz"] / harmonic_number
+            assignments = {}
+            for other in lines:
+                ratio = other["measured_hz"] / base
+                nearest = int(round(ratio))
+                if nearest < 1 or nearest > 8:
+                    continue
+                residual = abs(other["measured_hz"] - nearest * base)
+                tolerance = 2.0 * math.hypot(
+                    other["uncertainty_hz"], nearest * base_uncertainty
+                )
+                if residual > max(tolerance, 0.05):
+                    continue
+                current = assignments.get(nearest)
+                if current is None or residual < current:
+                    assignments[nearest] = residual
+            if len(assignments) < 2:
                 continue
-            ratio = other["measured_hz"] / base
-            nearest = int(round(ratio))
-            if nearest < 2 or nearest > 12:
-                continue
-            tolerance = 2.0 * math.hypot(
-                other["uncertainty_hz"], nearest * fundamental["uncertainty_hz"]
-            )
-            if abs(other["measured_hz"] - nearest * base) <= max(tolerance, 0.05):
-                matched.append(nearest)
-        matched = sorted(set(matched))
-        if len(matched) < 2:
-            continue
-        candidate = {"fundamental_hz": base, "multiples": matched}
-        if best is None or len(matched) > len(best["multiples"]):
-            best = candidate
+            multiples = sorted(assignments)
+            # More assigned lines first, then the family with the smallest
+            # harmonic numbers. That keeps an octave of a detected line ahead
+            # of an invented lower fundamental when both fit.
+            score = (len(assignments), -max(multiples))
+            candidate = {"fundamental_hz": round(base, 3), "multiples": multiples}
+            if best_score is None or score > best_score:
+                best = candidate
+                best_score = score
     return [] if best is None else [best]
 
 

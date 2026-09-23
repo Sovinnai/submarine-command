@@ -79,13 +79,18 @@ For each emitted line, at the source and receiver depths actually held:
    and `f * 0.4 kn / c` for unresolved radial motion. SNR here is
    `SL − TL − NL + DI` plus the shared window offset. `T` is 60 seconds on a
    normal listen or an active step, 180 seconds when focus is on that contact,
-   and 20 seconds when focus is on something else.
+   and 20 seconds when focus is on something else. The processing sample is a
+   uniform draw on [-1, 1] scaled by sqrt(3), so its standard deviation equals
+   that tone term.
 
 Broadband is reported in fixed analysis bands, 10–200 Hz, 200–1000 Hz and
 1000–5000 Hz, rather than by the emitter's private band edges.
 
 Harmonic relations are inferred from the measured frequencies and their
-uncertainties. They are a statement about the measurement.
+uncertainties. A detected line may be any harmonic from 1 through 8, so lines
+at 2f and 3f imply the missing fundamental. The relation is a statement about
+the measurement. When an active pulse and a passive spectrum are both detected
+on the same step, the reported reception strength is the louder of the two.
 
 ## Correlation
 

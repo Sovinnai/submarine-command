@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from submarine_command import acoustics, engine as e
+from submarine_command import acoustics, engine as e, spectra
 from submarine_command.platforms import BIOLOGIC, DART, ENTITY_REGISTRY
 
 
@@ -110,6 +110,38 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(stored, track["observations"][-1]["spectrum"])
         self.assertTrue(all(0 <= ob["bearing_true"] < 360 for ob in track["observations"]))
         self.assertTrue(all("emitted_hz" not in line for ob in track["observations"] for line in ob["spectrum"]["lines"]))
+
+    def test_active_reception_strength_includes_the_echo(self):
+        state = self.game["state"]
+        actor = state["actors"][0]
+        state["t"] = 5
+        dice = e.Dice(self.game["seed"], state["rng_trace"])
+        weak_spectrum = {
+            "public": {
+                "lines": [],
+                "broadband": [],
+                "harmonic_relations": [],
+                "evidence_note": "Measured frequencies are evidence. They do not identify the source.",
+            },
+            "feature": None,
+            "any_detected": True,
+            "best_excess_db": -2.0,
+            "strength": "weak",
+            "description": "No discrete frequency line resolved. Frequencies are measurements, not an identification.",
+            "detail": {"lines": [], "broadband": [], "emitted_line_ids": []},
+        }
+        with (
+            mock.patch.object(spectra, "measure_contact", return_value=weak_spectrum),
+            mock.patch.object(e, "reception_signal_excess", return_value=(18.0, None)),
+            mock.patch.object(e, "acoustic_window_db", return_value=0.0),
+            mock.patch.object(acoustics, "detection_probability", return_value=1.0),
+        ):
+            e.observe_contact(state, actor, dice, mode="active")
+        observation = state["tracks"][0]["observations"][-1]
+        self.assertEqual(observation["source"], "active")
+        self.assertEqual(observation["strength"], "strong")
+        self.assertIsNotNone(observation["range_estimate_nm"])
+        self.assertNotIn("best_excess_db", observation)
 
     def test_full_replay_with_radio_maneuvers_and_early_interrupts(self):
         actions = [self.order(id="a", activity="focus", focus="S01", minutes=30, interrupt_on=["new_contact"]),

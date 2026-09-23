@@ -216,6 +216,19 @@ class MeasurementTests(unittest.TestCase):
         self.assertTrue(reported <= emitted)
         self.assertLessEqual(len(measured["public"]["lines"]), len(emitted))
 
+    def test_processing_error_has_the_reported_one_sigma_width(self):
+        source = place(MERCHANT, id="merchant", x=0.0, y=2.0, course=90.0, speed=12.0, depth=0.0)
+        measured = self._measure(source, dice=FixedDice(0.0))
+        line = next(item for item in measured["detail"]["lines"] if item["line_id"] == "engine_order:1")
+        tone_sigma = spectra.cramer_rao_hz(
+            line["excess_db"] + spectra.NARROWBAND_DT_DB, spectra.INTEGRATION_SECONDS["listen"]
+        )
+        self.assertAlmostEqual(line["processing_error_hz"], -math.sqrt(3.0) * tone_sigma)
+        self.assertAlmostEqual(
+            spectra.line_error_sample(FixedDice(0.0), "merchant", "engine_order:1", self.state["t"]),
+            -math.sqrt(3.0),
+        )
+
     def test_feature_likelihoods_overlap_and_one_look_is_not_an_identification(self):
         for weights in spectra.FEATURE_LIKELIHOOD.values():
             self.assertGreaterEqual(min(weights), 0.15)
@@ -225,6 +238,37 @@ class MeasurementTests(unittest.TestCase):
             assessed = engine.assessments({"evidence": {"0": feature}, "visual": None})
             self.assertNotEqual(assessed["supervisor"]["confidence"], "high")
             self.assertIn(assessed["supervisor"]["favors"], ("surface", "submerged", "biologic"))
+
+
+class HarmonicRelationTests(unittest.TestCase):
+    def line(self, frequency, uncertainty=0.3):
+        return {"measured_hz": frequency, "uncertainty_hz": uncertainty, "quality": "moderate"}
+
+    def test_a_missing_fundamental_is_inferred_from_higher_harmonics(self):
+        relations = spectra.harmonic_relations([self.line(100.0), self.line(150.0)])
+        self.assertEqual(len(relations), 1)
+        self.assertEqual(relations[0]["multiples"], [2, 3])
+        self.assertAlmostEqual(relations[0]["fundamental_hz"], 50.0, places=3)
+        feature = spectra.spectral_feature({
+            "lines": [self.line(100.0), self.line(150.0)],
+            "broadband": [],
+            "harmonic_relations": relations,
+        })
+        self.assertEqual(feature, "harmonic_set")
+
+    def test_a_detected_fundamental_is_preferred_to_a_lower_invented_one(self):
+        relations = spectra.harmonic_relations([self.line(50.0), self.line(100.0), self.line(150.0)])
+        self.assertEqual(relations[0]["multiples"], [1, 2, 3])
+        self.assertAlmostEqual(relations[0]["fundamental_hz"], 50.0, places=3)
+        octave = spectra.harmonic_relations([self.line(100.0), self.line(200.0)])
+        self.assertEqual(octave[0]["multiples"], [1, 2])
+        self.assertAlmostEqual(octave[0]["fundamental_hz"], 100.0, places=3)
+
+    def test_unrelated_lines_are_not_called_harmonics(self):
+        self.assertEqual(
+            spectra.harmonic_relations([self.line(50.0, 0.2), self.line(73.0, 0.2)]),
+            [],
+        )
 
 
 class ReportBoundaryTests(unittest.TestCase):

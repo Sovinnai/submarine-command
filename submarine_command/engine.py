@@ -492,12 +492,14 @@ def observe_contact(state, actor, dice, mode="passive", opening=False):
     # replace the feature; it does not add a second, independent update.
     if measurement["feature"]:
         track["evidence"][str(window)] = measurement["feature"]
+    # Strength is the loudest detected contribution. An active echo can be
+    # stronger than the passive lines measured on the same step.
+    contributions = []
     if measurement["any_detected"]:
-        strength = measurement["strength"]
-    elif active_detected:
-        strength = acoustics.reception_strength(active_excess)
-    else:
-        strength = "weak"
+        contributions.append(measurement["best_excess_db"])
+    if active_detected:
+        contributions.append(active_excess)
+    strength = acoustics.reception_strength(max(contributions)) if contributions else "weak"
     obs = {"time": clock(t), "elapsed_minutes": t, "bearing_true": round(measured) % 360,
            "own_east_nm": round(own["x"], 3), "own_north_nm": round(own["y"], 3),
            "own_depth_feet": round(own["depth"], 2),
