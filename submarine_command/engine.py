@@ -500,6 +500,8 @@ def observe_contact(state, actor, dice, mode="passive", opening=False):
     obs = {"time": clock(t), "elapsed_minutes": t, "bearing_true": round(measured) % 360,
            "own_east_nm": round(own["x"], 3), "own_north_nm": round(own["y"], 3),
            "own_depth_feet": round(own["depth"], 2),
+           "own_course_true": round(own["course"] % 360, 2),
+           "own_speed_knots": round(own["speed"], 3),
            "source": mode, "strength": strength, "description": measurement["description"],
            "range_estimate_nm": None, "evidence_window": f"A{window:03d}",
            "spectrum": measurement["public"]}
@@ -689,6 +691,8 @@ def mast_observations(state, dice):
         obs = {"time": clock(state["t"]), "elapsed_minutes": state["t"], "bearing_true": b,
                "own_east_nm": round(state["own"]["x"], 3), "own_north_nm": round(state["own"]["y"], 3),
                "own_depth_feet": round(state["own"]["depth"], 2),
+               "own_course_true": round(state["own"]["course"] % 360, 2),
+               "own_speed_knots": round(state["own"]["speed"], 3),
                "source": "mast", "strength": "visual", "description": visual["description"],
                "range_estimate_nm": None, "evidence_window": None}
         track["observations"].append(obs)

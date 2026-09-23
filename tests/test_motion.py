@@ -6,6 +6,7 @@ import unittest
 from submarine_command import engine
 from submarine_command.observations import (
     SOUND_SPEED_MPS,
+    _fit_error,
     frequency_change_assessment,
     observed_bearing_drift,
     target_motion_estimate,
@@ -243,6 +244,87 @@ class MotionEstimateTests(unittest.TestCase):
         self.assertEqual(motion["measurements"]["stale_report_ids"], ["R1"])
         self.assertIn("R1", " ".join(motion["crew"]["competing_interpretations"]))
 
+    def test_repeated_bearings_in_one_window_do_not_tighten_the_gate(self):
+        later = [
+            _sample(30, 90, 0, 4, report="R2", window="A001"),
+            _sample(60, 90, 3, 4, report="R3", window="A003"),
+        ]
+        latest_only = [
+            _sample(10, 96, 0.4, 0.2, report="R1b", window="A000"),
+            *later,
+        ]
+        repeated = [
+            _sample(0, 90, 0, 0, report="R1", window="A000"),
+            *latest_only,
+        ]
+        both = target_motion_estimate(repeated, 60)
+        single = target_motion_estimate(latest_only, 60)
+        self.assertEqual(both["acceptable_solutions"], single["acceptable_solutions"])
+        self.assertGreater(both["acceptable_solution_count"], 0)
+        self.assertIn("R1", both["measurements"]["report_ids"])
+
+    def test_successive_turns_use_the_full_course_span(self):
+        points = [(0.0, 0.0)]
+        course = 0.0
+        for _ in range(3):
+            east, north = points[-1]
+            radians = math.radians(course)
+            points.append((east + 2.0 * math.sin(radians), north + 2.0 * math.cos(radians)))
+            course += 15.0
+        contact = (8.0, 0.0)
+        observations = [
+            _sample(
+                index * 30,
+                _bearing(east, north, *contact),
+                east,
+                north,
+                report=f"R{index + 1}",
+                window=f"A{index:03d}",
+            )
+            for index, (east, north) in enumerate(points)
+        ]
+        result = target_motion_estimate(observations, 90)
+        self.assertGreaterEqual(result["geometry"]["own_ship_course_change_degrees"], 30)
+        self.assertEqual(result["geometry"]["baseline"], "own_ship_course_change")
+        self.assertNotEqual(result["status"], "underdetermined")
+        self.assertFalse(result["target_maneuver"]["confirmed"])
+
+    def test_fractional_shared_bias_keeps_a_cell_the_integer_grid_drops(self):
+        # The later look is the range reference, 2 nm from a stopped contact.
+        # The earlier look is close aboard, so a one-degree bias miss swings
+        # that bearing by more than the gate. Integer biases fail; 1.55 degrees fits.
+        bias = 1.55
+        contact = (2.0, 0.0)
+        legs = ((0, 1.85, 0.0, -0.5), (40, 0.0, 0.0, 0.0))
+        observations = []
+        for minute, east, north, independent in legs:
+            true = math.degrees(math.atan2(contact[0] - east, contact[1] - north)) % 360
+            observations.append(_sample(
+                minute,
+                (true + bias + independent) % 360,
+                east,
+                north,
+                report=f"R{minute}",
+                window=f"A{minute // 20:03d}",
+            ))
+        result = target_motion_estimate(observations, 40)
+        self.assertIn(2, _ranges(result, 0))
+        samples = [
+            {
+                "elapsed_minutes": item["elapsed_minutes"],
+                "bearing_true": item["bearing_true"],
+                "own_east_nm": item["own_east_nm"],
+                "own_north_nm": item["own_north_nm"],
+                "source": item["source"],
+                "evidence_window": item["evidence_window"],
+                "range_estimate_nm": None,
+            }
+            for item in observations
+        ]
+        for integer_bias in (-2, -1, 0, 1, 2):
+            fitted = _fit_error(samples, 2, None, 0, integer_bias)
+            self.assertTrue(fitted is None or fitted[1] > 0)
+
 
 class ClassificationTests(unittest.TestCase):
     def spectrum(self):
@@ -331,6 +413,36 @@ class ClassificationTests(unittest.TestCase):
         )
         self.assertFalse(assessed["evidence_relationship"]["independent_corroboration"])
 
+    def test_an_empty_later_spectrum_does_not_replace_the_cited_lines(self):
+        first = self.observation("R0007", 5)
+        empty = self.observation("R0008", 10)
+        empty["spectrum"] = {"lines": [], "broadband": [], "harmonic_relations": []}
+        assessed = engine.assessments(self.track([first, empty]), 10)
+        cited = assessed["cited_evidence"][0]
+        self.assertEqual(cited["feature"], "high_band_energy")
+        self.assertEqual(cited["measured_lines"][0]["measured_hz"], 2200.0)
+        self.assertEqual(cited["report_ids"], ["R0007"])
+        self.assertNotIn("R0008", assessed["evidence_relationship"]["shared_report_ids"])
+
+    def test_visual_report_is_not_listed_as_replaced_acoustic_evidence(self):
+        track = self.track([self.observation("R0007", 5)])
+        track["observations"].append({
+            "elapsed_minutes": 15,
+            "time": "15",
+            "source": "mast",
+            "report_id": "R0009",
+            "bearing_true": 90,
+        })
+        track["visual"] = {
+            "report_id": "R0009",
+            "elapsed_minutes": 15,
+            "description": "Surface vessel observed",
+        }
+        assessed = engine.assessments(track, 15)
+        replaced = assessed["evidence_relationship"]["acoustic_reports_replaced_by_visual"]
+        self.assertEqual(replaced, ["R0007"])
+        self.assertNotIn("R0009", replaced)
+
 
 class PublicContactTests(unittest.TestCase):
     def test_public_contact_keeps_drift_and_motion_apart(self):
@@ -383,13 +495,15 @@ def _tone(frequency, quality="moderate", uncertainty=0.05):
     return {"measured_hz": frequency, "uncertainty_hz": uncertainty, "quality": quality}
 
 
-def _look(minute, report, lines, window="W000", east=0.0, north=0.0, bearing=90.0):
+def _look(minute, report, lines, window="W000", east=0.0, north=0.0, bearing=90.0, course=0.0, speed=0.0):
     return {
         "elapsed_minutes": minute,
         "time": f"t{minute}",
         "bearing_true": bearing,
         "own_east_nm": east,
         "own_north_nm": north,
+        "own_course_true": course,
+        "own_speed_knots": speed,
         "evidence_window": window,
         "report_id": report,
         "spectrum": {"lines": lines},
@@ -514,14 +628,14 @@ class FrequencyChangeTests(unittest.TestCase):
         shifted = 60.0 * (1.0 + closing / SOUND_SPEED_MPS)
         east = 10.0 * 5.0 / 60.0
         held = [
-            _look(0, "R1", [_tone(60.0)], east=0.0),
-            _look(5, "R2", [_tone(60.0)], east=0.0),
-            _look(10, "R3", [_tone(60.0)], east=east),
+            _look(0, "R1", [_tone(60.0)], east=0.0, course=90, speed=0),
+            _look(5, "R2", [_tone(60.0)], east=0.0, course=90, speed=0),
+            _look(10, "R3", [_tone(60.0)], east=east, course=90, speed=10),
         ]
         followed = [
-            _look(0, "R1", [_tone(60.0)], east=0.0),
-            _look(5, "R2", [_tone(60.0)], east=0.0),
-            _look(10, "R3", [_tone(shifted)], east=east),
+            _look(0, "R1", [_tone(60.0)], east=0.0, course=90, speed=0),
+            _look(5, "R2", [_tone(60.0)], east=0.0, course=90, speed=0),
+            _look(10, "R3", [_tone(shifted)], east=east, course=90, speed=10),
         ]
         compensated = frequency_change_assessment(followed, 10)
         raw = frequency_change_assessment(held, 10)
@@ -534,6 +648,45 @@ class FrequencyChangeTests(unittest.TestCase):
         self.assertEqual(raw["crew"]["supervisor"]["cue"], "radial_rate")
         self.assertLess(raw["comparisons"][-1]["matched_lines"][0]["residual_hz"], 0)
         self.assertGreater(abs(raw["comparisons"][-1]["matched_lines"][0]["own_ship_doppler_hz"]), 0.1)
+
+    def test_the_first_pair_uses_recorded_endpoint_speed(self):
+        closing = 10.0 * spectra.KNOTS_TO_METERS_PER_SECOND
+        shifted = 60.0 * (1.0 + closing / SOUND_SPEED_MPS)
+        corrected = frequency_change_assessment([
+            _look(0, "R1", [_tone(60.0)], course=90, speed=0),
+            _look(5, "R2", [_tone(shifted)], east=10.0 * 5.0 / 60.0, course=90, speed=10),
+        ], 5)
+        self.assertEqual(corrected["status"], "not_indicated")
+        self.assertTrue(corrected["comparisons"][0]["own_ship_doppler_removed"])
+        self.assertAlmostEqual(corrected["comparisons"][0]["own_ship_closing_change_knots"], 10.0, places=2)
+        self.assertEqual(corrected["comparisons"][0]["matched_lines"][0]["residual_hz"], 0.0)
+        missing = []
+        for look in (
+            _look(0, "R1", [_tone(60.0)]),
+            _look(5, "R2", [_tone(shifted)], east=10.0 * 5.0 / 60.0),
+        ):
+            look["own_course_true"] = None
+            look["own_speed_knots"] = None
+            missing.append(look)
+        uncorrected = frequency_change_assessment(missing, 5)
+        self.assertFalse(uncorrected["comparisons"][0]["own_ship_doppler_removed"])
+        self.assertEqual(uncorrected["status"], "indicated")
+
+    def test_same_window_reused_processing_error_cancels(self):
+        same = frequency_change_assessment([
+            _look(0, "R1", [_tone(60.0, uncertainty=0.2)]),
+            _look(5, "R2", [_tone(60.04, uncertainty=0.2)]),
+        ], 5)
+        crossed = frequency_change_assessment([
+            _look(0, "R1", [_tone(60.0, uncertainty=0.2)], window="W000"),
+            _look(20, "R2", [_tone(60.04, uncertainty=0.2)], window="W001"),
+        ], 20)
+        self.assertTrue(same["crew"]["supervisor"]["indicated"])
+        self.assertFalse(crossed["crew"]["operator"]["indicated"])
+        self.assertLess(
+            same["comparisons"][0]["matched_lines"][0]["sigma_hz"],
+            crossed["comparisons"][0]["matched_lines"][0]["sigma_hz"],
+        )
 
     def test_hidden_fields_and_looks_without_lines_do_not_change_the_call(self):
         clean = [

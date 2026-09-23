@@ -109,10 +109,10 @@ feature, and marks a report that is at least 20 minutes old.
 
 The 20-minute window stays longer than the five-minute step because it is the
 shared-error interval, not the decision cycle. A frequency comparison inside
-the window cancels that shared bias. A comparison across a new window uses the
-full reported uncertainty, so a small shift can remain inside the gate until
-a later look. Shortening the window to one step would redraw the error every
-look and hide those shifts.
+the window cancels that shared bias and the reused per-line processing sample.
+A comparison across a new window uses the full reported uncertainty, so a
+small shift can remain inside the gate until a later look. Shortening the
+window to one step would redraw the error every look and hide those shifts.
 
 Re-reading status, history or an existing report performs no draw and cannot
 add a line.

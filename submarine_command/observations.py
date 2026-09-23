@@ -5,7 +5,8 @@ is a separate constant-course grid fit to those bearings, their timestamps
 and provenance, and the own-ship positions recorded with them. Classification
 multiplies published priors by the spectral feature of each evidence window.
 A frequency-change indication compares successive measured lines after removing
-the own-ship Doppler implied by the recorded track. Aspect is not an input.
+the own-ship Doppler recorded as course and speed at each look. Aspect is not
+an input.
 """
 import math
 
@@ -24,6 +25,7 @@ COURSE_STEP_DEGREES = 15
 SPEED_GRID_KN = (0, 3, 6, 9, 12, 15, 18)
 ACOUSTIC_SOURCES = ("passive", "focus", "active")
 ACOUSTIC_BIAS_DEGREES = 2
+ACOUSTIC_BIAS_STEP_DEGREES = 0.5
 ACOUSTIC_ERROR_DEGREES = 5
 MAST_ERROR_DEGREES = 3
 ACTIVE_RANGE_LOW_FACTOR = 0.88
@@ -68,15 +70,19 @@ def motion_model():
             "A hypothesized range is accepted when it lies between the reported "
             "range divided by 1.12 and the reported range divided by 0.88."
         ),
+        "acoustic_bias_step_degrees": ACOUSTIC_BIAS_STEP_DEGREES,
         "correlation": (
-            "Passive, focus and active bearings share one bias of at most 2 degrees. "
-            "Repeated bearings in one evidence window do not tighten that gate and "
-            "cannot by themselves make the geometry constrained."
+            "Passive, focus and active bearings share one bias of at most 2 degrees, "
+            "searched in steps of 0.5 degrees, then in steps of 0.1 degrees beside any "
+            "step that lands within 1 degree of a gate. Bearings that share an evidence window "
+            "contribute one bearing constraint, so a repeated bearing does not tighten "
+            "that gate and cannot by itself make the geometry constrained."
         ),
         "baseline": (
-            "The family is called constrained only when own-ship course changes by "
-            "at least 30 degrees across at least three measurement times spanning "
-            "at least 20 minutes, and one narrow group remains on the grid."
+            "The family is called constrained only when the smallest arc containing "
+            "the own-ship track legs is at least 30 degrees, across at least three "
+            "measurement times spanning at least 20 minutes, and one narrow group "
+            "remains on the grid. Successive smaller turns add."
         ),
         "maneuver": (
             "The estimator does not confirm a contact maneuver. Observed bearing "
@@ -105,7 +111,7 @@ def classification_model():
         },
         "update": (
             "Each evidence window contributes one spectral feature, taken from the "
-            "latest measured spectrum in that window when a spectrum is present. "
+            "latest measured spectrum in that window that resolved a feature. "
             "The feature likelihoods multiply the role prior. A visual observation "
             "replaces that product for both roles. Both roles cite the same reports."
         ),
@@ -128,10 +134,11 @@ def frequency_change_model():
         "comparison": (
             "Successive measured lines are matched in frequency order. The "
             "frequency change is reduced by the own-ship closing-speed change "
-            f"implied by the recorded positions and bearings, at {SOUND_SPEED_MPS:g} m/s. "
-            "Inside one evidence window the shared frequency bias cancels. Across "
-            "a window boundary the full reported uncertainties apply, so a small "
-            "shift can stay inside the gate until a later look."
+            f"recorded as course and speed at each look, at {SOUND_SPEED_MPS:g} m/s. "
+            "A pair with no recorded speed is not corrected. Inside one evidence "
+            "window the shared frequency bias and the reused per-line processing "
+            "sample cancel. Across a window boundary the full reported uncertainties "
+            "apply, so a small shift can stay inside the gate until a later look."
         ),
         "cue": (
             "A residual inside the role's sigma gate is within error. A larger "
@@ -236,7 +243,7 @@ def _samples(observations):
 
 
 def _own_course_change(samples):
-    """Largest course change between own-ship track segments of at least 0.2 nm."""
+    """Smallest arc, in degrees, that contains every own-ship leg of at least 0.2 nm."""
     points = []
     for sample in samples:
         point = (sample["own_east_nm"], sample["own_north_nm"])
@@ -249,10 +256,9 @@ def _own_course_change(samples):
         if math.hypot(east, north) < 0.2:
             continue
         courses.append(math.degrees(math.atan2(east, north)) % 360)
-    change = 0.0
-    for start, end in zip(courses, courses[1:]):
-        change = max(change, abs(_ang_diff(end, start)))
-    return change
+    if not courses:
+        return 0.0
+    return _course_span(courses)
 
 
 def _course_span(courses):
@@ -264,60 +270,136 @@ def _course_span(courses):
     return 360 - max(gaps)
 
 
-def _evaluate(samples, range_nm, course, speed, bias):
-    reference = samples[-1]
+def _bias_grid(step):
+    count = int(round(2 * ACOUSTIC_BIAS_DEGREES / step))
+    return tuple(
+        round(-ACOUSTIC_BIAS_DEGREES + index * step, 2)
+        for index in range(count + 1)
+    )
+
+
+_COARSE_BIASES = _bias_grid(ACOUSTIC_BIAS_STEP_DEGREES)
+_FINE_STEP_DEGREES = 0.1
+
+
+def _bearing_samples(samples):
+    """One acoustic bearing per evidence window. Other looks stay separate."""
+    acoustic = {}
+    others = []
+    for sample in samples:
+        window = sample["evidence_window"]
+        if window and sample["source"] in ACOUSTIC_SOURCES:
+            acoustic[window] = sample
+        else:
+            others.append(sample)
+    return list(acoustic.values()) + others
+
+
+def _contact_at(reference, sample, range_nm, course, speed, bias):
     place = reference["bearing_true"]
     if reference["source"] in ACOUSTIC_SOURCES:
         place = (place - bias) % 360
     angle = math.radians(place)
-    x_ref = reference["own_east_nm"] + math.sin(angle) * range_nm
-    y_ref = reference["own_north_nm"] + math.cos(angle) * range_nm
-    t_ref = reference["elapsed_minutes"]
+    east = reference["own_east_nm"] + math.sin(angle) * range_nm
+    north = reference["own_north_nm"] + math.cos(angle) * range_nm
+    hours = (sample["elapsed_minutes"] - reference["elapsed_minutes"]) / 60.0
+    if speed != 0 and course is not None:
+        heading = math.radians(course)
+        east += math.sin(heading) * speed * hours
+        north += math.cos(heading) * speed * hours
+    dx = east - sample["own_east_nm"]
+    dy = north - sample["own_north_nm"]
+    span = math.hypot(dx, dy)
+    if span < 0.05:
+        return None
+    return math.degrees(math.atan2(dx, dy)) % 360, span
+
+
+def _fit_error(samples, range_nm, course, speed, bias, bearing_samples=None, abort_excess=None):
+    """Return max bearing error and its excess over the gate, or None if invalid.
+
+    Excess is negative when every bearing gate passes. A reported active range
+    is still checked on every look that carried one. ``abort_excess`` stops a
+    hopeless bias before the remaining looks are evaluated.
+    """
+    reference = samples[-1]
     max_error = 0.0
-    for sample in samples:
-        hours = (sample["elapsed_minutes"] - t_ref) / 60.0
-        if speed == 0 or course is None:
-            east, north = x_ref, y_ref
-        else:
-            heading = math.radians(course)
-            east = x_ref + math.sin(heading) * speed * hours
-            north = y_ref + math.cos(heading) * speed * hours
-        dx = east - sample["own_east_nm"]
-        dy = north - sample["own_north_nm"]
-        if math.hypot(dx, dy) < 0.05:
+    worst_excess = -math.inf
+    if bearing_samples is None:
+        bearing_samples = _bearing_samples(samples)
+    for sample in bearing_samples:
+        predicted = _contact_at(reference, sample, range_nm, course, speed, bias)
+        if predicted is None:
             return None
-        predicted = math.degrees(math.atan2(dx, dy)) % 360
-        residual = _ang_diff(sample["bearing_true"], predicted)
+        bearing, _span = predicted
+        residual = _ang_diff(sample["bearing_true"], bearing)
         if sample["source"] in ACOUSTIC_SOURCES:
-            error = residual - bias
+            error = abs(residual - bias)
             gate = ACOUSTIC_ERROR_DEGREES
         else:
-            error = residual
+            error = abs(residual)
             gate = MAST_ERROR_DEGREES
-        if abs(error) > gate + 1e-9:
+        excess = error - gate
+        if abort_excess is not None and excess > abort_excess:
             return None
-        max_error = max(max_error, abs(error))
+        max_error = max(max_error, error)
+        worst_excess = max(worst_excess, excess)
+    for sample in samples:
         reported = sample["range_estimate_nm"]
-        if reported is not None:
-            predicted_range = math.hypot(dx, dy)
-            low = reported / ACTIVE_RANGE_HIGH_FACTOR
-            high = reported / ACTIVE_RANGE_LOW_FACTOR
-            if not low - 1e-9 <= predicted_range <= high + 1e-9:
-                return None
-    return max_error
+        if reported is None:
+            continue
+        predicted = _contact_at(reference, sample, range_nm, course, speed, bias)
+        if predicted is None:
+            return None
+        _bearing, span = predicted
+        low = reported / ACTIVE_RANGE_HIGH_FACTOR
+        high = reported / ACTIVE_RANGE_LOW_FACTOR
+        if not low - 1e-9 <= span <= high + 1e-9:
+            return None
+    return max_error, worst_excess
 
 
 def _best_bias(samples, range_nm, course, speed):
     acoustic = any(sample["source"] in ACOUSTIC_SOURCES for sample in samples)
-    biases = range(-ACOUSTIC_BIAS_DEGREES, ACOUSTIC_BIAS_DEGREES + 1) if acoustic else (0,)
+    if not acoustic:
+        fitted = _fit_error(samples, range_nm, course, speed, 0.0)
+        if fitted is None or fitted[1] > 1e-9:
+            return None
+        return fitted[0], 0.0, 0.0
     best = None
-    for bias in biases:
-        error = _evaluate(samples, range_nm, course, speed, bias)
-        if error is None:
-            continue
-        candidate = (error, abs(bias), bias)
-        if best is None or candidate < best:
-            best = candidate
+    nearest = None
+    bearing_samples = _bearing_samples(samples)
+
+    def consider(bias, abort_excess):
+        nonlocal best, nearest
+        fitted = _fit_error(
+            samples, range_nm, course, speed, bias,
+            bearing_samples=bearing_samples, abort_excess=abort_excess,
+        )
+        if fitted is None:
+            return
+        max_error, excess = fitted
+        if excess <= 1e-9:
+            candidate = (max_error, abs(bias), bias)
+            if best is None or candidate < best:
+                best = candidate
+        if nearest is None or excess < nearest[0]:
+            nearest = (excess, bias)
+
+    for bias in _COARSE_BIASES:
+        consider(bias, 1.0)
+    if best is not None:
+        return best
+    # A cell can meet the gate between the 0.5-degree steps. Check the tenth
+    # of a degree beside the closest step when that step is near the gate.
+    if nearest is None or nearest[0] > 1.0:
+        return None
+    low = max(-float(ACOUSTIC_BIAS_DEGREES), nearest[1] - ACOUSTIC_BIAS_STEP_DEGREES)
+    high = min(float(ACOUSTIC_BIAS_DEGREES), nearest[1] + ACOUSTIC_BIAS_STEP_DEGREES)
+    bias = low
+    while bias <= high + 1e-9:
+        consider(round(bias, 2), 0.0)
+        bias += _FINE_STEP_DEGREES
     return best
 
 
@@ -597,9 +679,9 @@ def target_motion_estimate(observations, elapsed_minutes=None):
         if sample["elapsed_minutes"] not in distinct:
             distinct.append(sample["elapsed_minutes"])
     span = 0 if len(distinct) < 2 else distinct[-1] - distinct[0]
-    course_change = _own_course_change(samples) if samples else 0.0
+    course_change = _round_degrees(_own_course_change(samples)) if samples else 0.0
     geometry = {
-        "own_ship_course_change_degrees": _round_degrees(course_change),
+        "own_ship_course_change_degrees": course_change,
         "span_minutes": span,
         "distinct_times": len(distinct),
         "baseline": "insufficient",
@@ -777,20 +859,28 @@ def crew_classification(track, elapsed_minutes=None):
     )
     for key in window_keys:
         window_obs = _window_observations(observations, key)
-        latest = window_obs[-1] if window_obs else None
-        feature = evidence[key]
-        spectrum = latest.get("spectrum") if latest and isinstance(latest.get("spectrum"), dict) else None
-        if spectrum is not None:
+        producers = []
+        for obs in window_obs:
+            spectrum = obs.get("spectrum") if isinstance(obs.get("spectrum"), dict) else None
+            if spectrum is None:
+                continue
             derived = spectra.spectral_feature(spectrum)
             if derived:
-                feature = derived
+                producers.append((obs, spectrum, derived))
+        if producers:
+            _source, spectrum, feature = producers[-1]
+            cited_obs = [obs for obs, _spectrum, derived in producers if derived == feature]
+        else:
+            feature = evidence[key]
+            spectrum = None
+            cited_obs = window_obs
         weights = _family_weights(feature)
         if weights is None:
             continue
         feature_weights.append(weights)
         report_ids = []
         stale_ids = []
-        for obs in window_obs:
+        for obs in cited_obs:
             report_id = obs.get("report_id")
             if not isinstance(report_id, str) or report_id in report_ids:
                 continue
@@ -801,7 +891,7 @@ def crew_classification(track, elapsed_minutes=None):
         if report_ids:
             window_stale = len(stale_ids) == len(report_ids)
         else:
-            window_stale = latest is not None and _stale_observation(latest, elapsed_minutes)
+            window_stale = bool(cited_obs) and _stale_observation(cited_obs[-1], elapsed_minutes)
         cited.append({
             "evidence_window": f"A{int(key):03d}" if str(key).isdigit() else str(key),
             "feature": feature,
@@ -846,9 +936,14 @@ def crew_classification(track, elapsed_minutes=None):
                     stale_reports.append(report_id)
     acoustic_replaced = []
     if basis == "visual":
+        visual_id = visual.get("report_id") if isinstance(visual, dict) else None
         for obs in observations:
+            if obs.get("source") == "mast":
+                continue
             report_id = obs.get("report_id")
-            if isinstance(report_id, str) and report_id not in acoustic_replaced:
+            if not isinstance(report_id, str) or report_id == visual_id:
+                continue
+            if report_id not in acoustic_replaced:
                 acoustic_replaced.append(report_id)
     roles = {}
     for role, prior in PRIORS.items():
@@ -964,6 +1059,8 @@ def _frequency_samples(observations):
         bearing = _number(obs.get("bearing_true"))
         east = _number(obs.get("own_east_nm"))
         north = _number(obs.get("own_north_nm"))
+        course = _number(obs.get("own_course_true"))
+        speed = _number(obs.get("own_speed_knots"))
         window = obs.get("evidence_window")
         prepared.append({
             "elapsed_minutes": elapsed,
@@ -971,6 +1068,8 @@ def _frequency_samples(observations):
             "bearing_true": None if bearing is None else bearing % 360,
             "own_east_nm": east,
             "own_north_nm": north,
+            "own_course_true": None if course is None else course % 360,
+            "own_speed_knots": speed,
             "evidence_window": window if isinstance(window, str) else None,
             "report_id": obs.get("report_id") if isinstance(obs.get("report_id"), str) else None,
             "lines": lines,
@@ -979,29 +1078,14 @@ def _frequency_samples(observations):
     return prepared
 
 
-def _own_velocities(samples):
-    """Knots of own-ship travel on the segment that ends at each sample."""
-    velocities = [(0.0, 0.0) for _ in samples]
-    if len(samples) < 2:
-        return velocities
-    segments = []
-    for earlier, later in zip(samples, samples[1:]):
-        minutes = later["elapsed_minutes"] - earlier["elapsed_minutes"]
-        if minutes <= 0 or None in (
-            earlier["own_east_nm"], earlier["own_north_nm"],
-            later["own_east_nm"], later["own_north_nm"],
-        ):
-            segments.append(None)
-            continue
-        hours = minutes / 60.0
-        segments.append((
-            (later["own_east_nm"] - earlier["own_east_nm"]) / hours,
-            (later["own_north_nm"] - earlier["own_north_nm"]) / hours,
-        ))
-    velocities[0] = segments[0] if segments[0] is not None else (0.0, 0.0)
-    for index, segment in enumerate(segments):
-        velocities[index + 1] = segment if segment is not None else velocities[index]
-    return velocities
+def _endpoint_velocity(sample):
+    """Own-ship east/north knots recorded at the look. Positions are not a substitute."""
+    course = sample.get("own_course_true")
+    speed = sample.get("own_speed_knots")
+    if course is None or speed is None:
+        return None
+    radians = math.radians(course)
+    return speed * math.sin(radians), speed * math.cos(radians)
 
 
 def _closing_knots(velocity, bearing):
@@ -1024,11 +1108,35 @@ def _motion_sigma_hz(frequency):
     )
 
 
-def _line_sigma_hz(uncertainty, frequency, same_window):
+def _component_sigmas(uncertainty, frequency):
+    bias = _bias_sigma_hz(frequency)
+    motion = _motion_sigma_hz(frequency)
+    processing = math.sqrt(max(uncertainty ** 2 - bias ** 2 - motion ** 2, 0.0))
+    return processing, bias, motion
+
+
+def _difference_sigma_hz(left, right, same_window):
+    """Sigma of a frequency difference.
+
+    Inside one evidence window the per-line processing sample is reused, so it
+    cancels except for a change in its width, and the shared bias cancels except
+    for the difference in line frequency. Across a window both are independent.
+    """
+    processing_left, bias_left, motion_left = _component_sigmas(
+        left["uncertainty_hz"], left["measured_hz"]
+    )
+    processing_right, bias_right, motion_right = _component_sigmas(
+        right["uncertainty_hz"], right["measured_hz"]
+    )
     if not same_window:
-        return max(uncertainty, _motion_sigma_hz(frequency))
-    reduced = math.sqrt(max(uncertainty ** 2 - _bias_sigma_hz(frequency) ** 2, 0.0))
-    return max(reduced, _motion_sigma_hz(frequency))
+        return math.hypot(
+            max(left["uncertainty_hz"], motion_left),
+            max(right["uncertainty_hz"], motion_right),
+        )
+    return math.hypot(
+        abs(processing_right - processing_left),
+        math.hypot(abs(bias_right - bias_left), math.hypot(motion_left, motion_right)),
+    )
 
 
 def _match_lines(earlier, later):
@@ -1093,10 +1201,7 @@ def _compare_spectra(earlier, later, earlier_velocity, later_velocity):
         else:
             own_hz = 0.0
         residual = raw - own_hz
-        sigma = math.hypot(
-            _line_sigma_hz(left["uncertainty_hz"], left["measured_hz"], same_window),
-            _line_sigma_hz(right["uncertainty_hz"], right["measured_hz"], same_window),
-        )
+        sigma = _difference_sigma_hz(left, right, same_window)
         ratio = abs(residual) / sigma if sigma > 0 else 0.0
         fractional = abs(residual) / left["measured_hz"]
         lines.append({
@@ -1230,12 +1335,14 @@ def frequency_change_assessment(observations, elapsed_minutes=None):
     low confidence on one look and become clearer on a later look.
     """
     samples = _frequency_samples(observations)
-    velocities = _own_velocities(samples)
     pairs = [(index, index + 1) for index in range(len(samples) - 1)]
     if len(samples) > 2:
         pairs.append((0, len(samples) - 1))
     comparisons = [
-        _compare_spectra(samples[start], samples[end], velocities[start], velocities[end])
+        _compare_spectra(
+            samples[start], samples[end],
+            _endpoint_velocity(samples[start]), _endpoint_velocity(samples[end]),
+        )
         for start, end in pairs
     ]
     reviewed = []

@@ -131,21 +131,22 @@ maneuver. When no constant-motion solution fits, a maneuver is one competing
 explanation beside measurement error and contact misassociation.
 
 Classification multiplies each role's prior by the overlapping spectral
-feature recorded for each evidence window. The feature comes from that
-window's latest measured spectrum. The assessment cites the reports and the
-measured lines, uncertainties and qualities. Both roles cite that same set.
+feature recorded for each evidence window. The feature comes from the latest
+spectrum in that window that resolved one. The assessment cites that
+spectrum's reports and measured lines, uncertainties and qualities. Both
+roles cite that same set.
 A report at least 20 minutes old is marked stale and remains in the history.
 A visual observation replaces the acoustic update for both roles.
 
 A separate frequency indication compares successive measured lines. It removes
-the own-ship closing-speed change implied by the recorded positions and
-bearings. The operator calls a change at 2 sigma and the supervisor at 3 sigma,
-so one role can hear it before the other, and a later look can cross the higher
-gate. Inside one 20-minute evidence window the shared frequency bias cancels,
-which is why that window stays longer than the five-minute step: a new draw
-every step would hide a small shift. A residual inside the gate is not called.
-A residual larger than the published Doppler bound is read as an emitted-frequency
-change. Received level does not depend on bow, beam, or stern aspect.
+the own-ship closing-speed change recorded as course and speed at each look.
+The operator calls a change at 2 sigma and the supervisor at 3 sigma, so one
+role can hear it before the other, and a later look can cross the higher
+gate. Inside one 20-minute evidence window the shared frequency bias and the
+reused per-line processing error cancel, which is why that window stays longer
+than the five-minute step: a new draw every step would hide a small shift. A
+residual inside the gate is not called. A residual larger than the published
+Doppler bound is read as an emitted-frequency change. Received level does not depend on bow, beam, or stern aspect.
 
 ## What makes a good session
 
