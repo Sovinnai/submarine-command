@@ -299,8 +299,20 @@ class EntitySpec:
                 "measurements": {
                     "bearing_history": True,
                     "bearing_drift": (
-                        "Endpoint change from recorded bearings, labeled as an "
-                        "observation trend; not a target-motion solution."
+                        "Endpoint change from recorded bearings over at most 30 minutes. "
+                        "It is an observation trend, reported separately from the "
+                        "target-motion family."
+                    ),
+                    "target_motion": (
+                        "Constant course and speed on a published grid, fit to recorded "
+                        "bearings, timestamps, provenance and own-ship positions. "
+                        "Ambiguous solutions are kept. Hidden contact motion is not an "
+                        "input. A residual is not a confirmed maneuver."
+                    ),
+                    "frequency_change": (
+                        "Crew indication from successive measured frequencies after "
+                        "removing own-ship Doppler. A shift inside the role's sigma "
+                        "gate is not called. Aspect does not change source level."
                     ),
                     "numeric_narrowband_frequencies": True,
                 },

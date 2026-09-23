@@ -328,8 +328,10 @@ def public_model():
         },
         "feature_note": (
             "Crew assessments update once per correlation window from the "
-            "latest measured spectral feature. Every feature has likelihood "
-            "in every contact domain. A frequency does not select an identity."
+            "latest measured spectral feature and cite that report's measured "
+            "lines, uncertainty and quality. Every feature has likelihood in "
+            "every contact domain. A frequency does not select an identity. "
+            "The two roles share those reports; a second reading is not new evidence."
         ),
     }
 
