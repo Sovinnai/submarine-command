@@ -46,7 +46,7 @@ class EngineTests(unittest.TestCase):
                     self.assertFalse(set(obj) & {
                         "seed", "actors", "actor", "kind", "spec", "rng_trace",
                         "initial_state", "intent", "last_heard", "aware",
-                        "bearing_bias", "bulletins", "radio_reliability", "true",
+                        "bearing_bias", "bulletins", "radio_reliability", "radio_intercepts", "true",
                         "signature", "listens", "emitted_hz", "offset_fraction",
                         "family", "source_level_db", "detail",
                     })
@@ -146,10 +146,10 @@ class EngineTests(unittest.TestCase):
     def test_full_replay_with_radio_maneuvers_and_early_interrupts(self):
         actions = [self.order(id="a", activity="focus", focus="S01", minutes=30, interrupt_on=["new_contact"]),
                    self.order(id="b", course=45, speed=7, minutes=25),
-                   self.order(id="c", depth=70, activity="receive", minutes=30),
+                   self.order(id="c", depth=70, activity="receive", link="mast_receive", minutes=30),
                    self.order(id="d", activity="mast", depth=70, speed=5, minutes=10),
                    self.order(id="e", depth=400, activity="active", minutes=5),
-                   self.order(id="f", depth=70, activity="transmit", assessment="unresolved", message="Evidence remains mixed", basis=["R0004"], minutes=40)]
+                   self.order(id="f", depth=70, activity="transmit", link="mast_transmit", assessment="unresolved", message="Evidence remains mixed", basis=["R0004"], minutes=40)]
         for order in actions:
             order["expected_turn"] = len(self.game["events"])
             e.apply_order(self.game, order)
@@ -195,6 +195,7 @@ class EngineTests(unittest.TestCase):
             self.order(
                 id="receive-empty",
                 activity="receive",
+                link="mast_receive",
                 depth=70,
                 speed=5,
                 minutes=60,
@@ -328,7 +329,7 @@ class EngineTests(unittest.TestCase):
     def test_link_is_deferred_until_the_boat_reaches_mast_depth(self):
         self.game["state"]["radio_reliability"] = 1
         result = e.apply_order(self.game, self.order(
-            id="rx", activity="receive", depth=70, speed=8, minutes=5))
+            id="rx", activity="receive", link="mast_receive", depth=70, speed=8, minutes=5))
         categories = [entry["category"] for entry in result["reports_this_turn"]]
         self.assertIn("activity_deferred", categories)
         self.assertNotIn("radio_empty", categories)
@@ -343,7 +344,7 @@ class EngineTests(unittest.TestCase):
         while not linked and turn < 8:
             result = e.apply_order(self.game, self.order(
                 id=f"rx{turn}", expected_turn=turn, activity="receive",
-                depth=70, speed=8, minutes=15))
+                link="mast_receive", depth=70, speed=8, minutes=15))
             linked = any(r["category"] in ("radio_empty", "message_received")
                          for r in result["reports_this_turn"])
             turn += 1
@@ -541,11 +542,11 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             e.validate_order(self.order(id="f", expected_turn=1, activity="focus"),
                              self.game["state"])
-        transmit = self.order(id="t", expected_turn=1, activity="transmit", depth=70,
-                              speed=5, assessment="unresolved", message="Mixed evidence",
-                              basis=[])
+        transmit = self.order(id="t", expected_turn=1, activity="transmit", link="mast_transmit",
+                              depth=70, speed=5, assessment="unresolved",
+                              message="Mixed evidence", basis=[])
         e.validate_order(transmit, self.game["state"])
-        for field in ("assessment", "message", "basis"):
+        for field in ("assessment", "message", "basis", "link"):
             with self.assertRaises(ValueError):
                 e.validate_order({k: v for k, v in transmit.items() if k != field},
                                  self.game["state"])
@@ -731,6 +732,281 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(rejected.returncode, 2)
             self.assertEqual(before, (Path(temp) / "private.json").read_bytes())
             self.assertNotIn("seed", status.stdout)
+
+
+class CommunicationsTests(unittest.TestCase):
+    def setUp(self):
+        self.game = e.initialize("ab" * 32)
+
+    def order(self, **kwargs):
+        own = self.game["state"]["own"]
+        return {"id": "comm-01", "expected_turn": len(self.game["events"]),
+                "activity": "receive", "minutes": 5, "interrupt_on": [],
+                "course": own["course"], "speed": own["speed"], "depth": own["depth"],
+                "operating_mode": own["operating_mode"], **kwargs}
+
+    def place(self, depth, speed=5):
+        self.game["state"]["own"]["depth"] = float(depth)
+        self.game["state"]["own"]["speed"] = float(speed)
+        self.game["state"]["ordered"]["depth"] = float(depth)
+        self.game["state"]["ordered"]["speed"] = float(speed)
+
+    def warship(self):
+        return next(
+            actor for actor in self.game["state"]["actors"]
+            if e.entity_spec(actor).category == e.EntityCategory.SURFACE_WARSHIP
+        )
+
+    def radio_draws(self):
+        return [
+            entry for entry in self.game["state"]["rng_trace"]
+            if str(entry["event"]).startswith("radio-window:")
+        ]
+
+    def test_receive_and_transmit_modes_reject_the_other_direction(self):
+        self.place(70)
+        before = e.canonical(self.game)
+        with self.assertRaises(ValueError):
+            e.validate_order(self.order(link="mast_transmit"), self.game["state"])
+        with self.assertRaises(ValueError):
+            e.validate_order(self.order(
+                activity="transmit", link="buoyant_receive", depth=200, speed=5,
+                assessment="unresolved", message="Report", basis=[],
+            ), self.game["state"])
+        with self.assertRaises(ValueError):
+            e.validate_order(self.order(activity="retrieve", link="mast_receive"), self.game["state"])
+        with self.assertRaises(ValueError):
+            e.validate_order(
+                self.order(activity="listen", link="mast_receive"), self.game["state"]
+            )
+        self.assertEqual(before, e.canonical(self.game))
+
+    def test_link_must_be_named_and_envelopes_differ(self):
+        before = e.canonical(self.game)
+        with self.assertRaises(ValueError) as raised:
+            e.validate_order(self.order(depth=70, speed=5), self.game["state"])
+        self.assertIn("link", str(raised.exception))
+        self.assertIn("no default", str(raised.exception))
+        e.validate_order(
+            self.order(link="mast_receive", depth=70, speed=8), self.game["state"]
+        )
+        with self.assertRaises(ValueError):
+            e.validate_order(
+                self.order(link="buoyant_receive", depth=70, speed=5),
+                self.game["state"],
+            )
+        e.validate_order(
+            self.order(link="buoyant_receive", depth=200, speed=6), self.game["state"]
+        )
+        with self.assertRaises(ValueError):
+            e.validate_order(
+                self.order(link="mast_receive", depth=200, speed=5),
+                self.game["state"],
+            )
+        self.assertEqual(before, e.canonical(self.game))
+
+    def test_repeated_attempts_in_one_window_share_the_channel_draw(self):
+        self.place(70)
+        self.game["state"]["radio_reliability"] = 0
+        first = e.apply_order(self.game, self.order(
+            id="fail-1", link="mast_receive", depth=70, speed=5))
+        second = e.apply_order(self.game, self.order(
+            id="fail-2", link="mast_receive", depth=70, speed=5))
+        self.assertIn("radio_failure", [r["category"] for r in first["reports_this_turn"]])
+        self.assertIn("radio_failure", [r["category"] for r in second["reports_this_turn"]])
+        draws = self.radio_draws()
+        self.assertEqual([entry["event"] for entry in draws], ["radio-window:0", "radio-window:0"])
+        self.assertEqual(draws[0]["u"], draws[1]["u"])
+        self.game["state"]["antennas"]["buoyant_receive_array"]["deployment"] = "streamed"
+        self.game["state"]["own"]["equipment"]["buoyant_receive_array"] = "streamed"
+        self.place(200)
+        third = e.apply_order(self.game, self.order(
+            id="fail-3", link="buoyant_receive", depth=200, speed=5))
+        self.assertIn("radio_failure", [r["category"] for r in third["reports_this_turn"]])
+        draws = self.radio_draws()
+        self.assertEqual(draws[2]["event"], "radio-window:0")
+        self.assertEqual(draws[0]["u"], draws[2]["u"])
+
+    def test_a_deferred_link_draws_no_channel(self):
+        before = len(self.radio_draws())
+        e.apply_order(self.game, self.order(
+            id="deep-rx", link="mast_receive", depth=70, speed=5, minutes=5))
+        self.assertEqual(before, len(self.radio_draws()))
+        self.assertEqual(self.game["state"]["antennas"]["radio_mast"]["deployment"], "stowed")
+        self.assertTrue(e.verify(self.game)["verified"])
+
+    def test_mast_receive_copies_the_dated_bulletin_without_adding_truth(self):
+        self.place(70)
+        self.game["state"]["radio_reliability"] = 1
+        note = (
+            "Dated exercise note: treat the passage as empty of submerged traffic. "
+            "This note can be wrong."
+        )
+        self.game["state"]["bulletins"].append(
+            {"id": "NOTE-WRONG", "available": 0, "text": note}
+        )
+        hidden_name = self.game["state"]["actors"][0]["name"]
+        result = e.apply_order(self.game, self.order(
+            id="copy", link="mast_receive", depth=70, speed=5))
+        copied = [
+            report for report in result["reports_this_turn"]
+            if report["category"] == "message_received"
+        ]
+        self.assertEqual([report["text"] for report in copied], [note])
+        self.assertNotIn(hidden_name, note)
+        self.assertFalse(copied[0]["link"]["emitted"])
+        self.assertEqual(copied[0]["link"]["cycle"], "raised_and_housed")
+        self.assertNotIn(hidden_name, json.dumps(result))
+        self.assertNotIn("radio_intercepts", json.dumps(result))
+        self.assertFalse(self.warship()["aware"])
+
+    def test_mast_transmission_radiates_and_can_be_intercepted(self):
+        self.place(70)
+        channel = e.Dice(self.game["seed"], []).u("radio-window:0")
+        # The link fails, and the same draw still clears the published intercept margin.
+        self.game["state"]["radio_reliability"] = channel - 0.05
+        ship = self.warship()
+        ship.update(x=1.0, y=0.0, course=90.0, speed=3.0, aware=False, last_heard=None)
+        merchant = next(
+            actor for actor in self.game["state"]["actors"]
+            if e.entity_spec(actor).category == e.EntityCategory.MERCHANT
+        )
+        merchant.update(x=8.0, y=0.0, aware=False)
+        result = e.apply_order(self.game, self.order(
+            id="send", activity="transmit", link="mast_transmit", depth=70, speed=5,
+            assessment="unresolved", message="Evidence remains mixed", basis=[]))
+        sent = next(
+            report for report in result["reports_this_turn"]
+            if report["category"] == "radio_failure"
+        )
+        self.assertIn("radiated", sent["text"])
+        self.assertTrue(sent["link"]["emitted"])
+        self.assertEqual(sent["link"]["deployment"], "stowed")
+        self.assertTrue(ship["aware"])
+        self.assertEqual(ship["last_heard"]["source"], "radio_intercept")
+        self.assertFalse(merchant["aware"])
+        self.assertEqual(len(self.game["state"]["radio_intercepts"]), 1)
+        self.assertNotIn("radio_intercepts", json.dumps(result))
+        ship.update(x=40.0, y=0.0, course=90.0, speed=3.0, aware=False, last_heard=None)
+        self.game["state"]["radio_intercepts"].clear()
+        e.apply_order(self.game, self.order(
+            id="send-far", activity="transmit", link="mast_transmit", depth=70, speed=5,
+            assessment="unresolved", message="Still mixed", basis=[]))
+        self.assertFalse(ship["aware"])
+        self.assertEqual(self.game["state"]["radio_intercepts"], [])
+        draws = self.radio_draws()
+        self.assertEqual(draws[0]["u"], draws[1]["u"])
+        self.assertFalse(any("intercept" in entry["event"] for entry in self.game["state"]["rng_trace"]))
+
+    def test_buoyant_reception_waits_for_deployment_and_latency(self):
+        self.game["state"]["radio_reliability"] = 2
+        deployed = e.apply_order(self.game, self.order(
+            id="stream", link="buoyant_receive", depth=400, speed=5, minutes=30,
+            interrupt_on=["antenna_deployed"]))
+        self.assertEqual(deployed["last_execution"]["elapsed_minutes"], 10)
+        self.assertEqual(deployed["last_execution"]["stop_reason"], "interrupt")
+        antenna = deployed["own_ship"]["antennas"]["buoyant_receive_array"]
+        self.assertEqual(antenna["deployment"], "streamed")
+        self.assertEqual(antenna["progress_minutes"], 0)
+        self.assertEqual(self.radio_draws(), [])
+        early = e.apply_order(self.game, self.order(
+            id="early", link="buoyant_receive", depth=400, speed=5))
+        self.assertIn("radio_empty", [r["category"] for r in early["reports_this_turn"]])
+        self.assertNotIn(
+            "message_received", [r["category"] for r in early["reports_this_turn"]]
+        )
+        e.apply_order(self.game, self.order(
+            id="wait", activity="listen", depth=400, speed=5, minutes=20))
+        # Scheduled 0330 traffic plus 15 minutes of buoyant latency is due at 35.
+        self.assertGreaterEqual(self.game["state"]["t"], 35)
+        copied = e.apply_order(self.game, self.order(
+            id="late", link="buoyant_receive", depth=400, speed=5))
+        messages = [
+            report for report in copied["reports_this_turn"]
+            if report["category"] == "message_received"
+        ]
+        bulletin = self.game["state"]["bulletins"][0]
+        self.assertEqual(messages[0]["text"], bulletin["text"])
+        self.assertFalse(messages[0]["link"]["emitted"])
+        self.assertEqual(
+            [report["message_id"] for report in messages],
+            [bulletin["id"]],
+        )
+        before = e.canonical(self.game)
+        self.assertEqual(copied, e.public_view(self.game))
+        e.public_history(self.game)
+        self.assertEqual(before, e.canonical(self.game))
+
+    def test_streamed_antenna_blocks_orders_outside_its_envelope_until_retrieval(self):
+        e.apply_order(self.game, self.order(
+            id="deepen", activity="listen", depth=800, speed=5, minutes=20))
+        self.assertEqual(self.game["state"]["own"]["depth"], 800)
+        deferred = e.apply_order(self.game, self.order(
+            id="approach", link="buoyant_receive", depth=200, speed=5, minutes=15))
+        self.assertIn(
+            "activity_deferred",
+            [report["category"] for report in deferred["reports_this_turn"]],
+        )
+        self.assertEqual(
+            self.game["state"]["antennas"]["buoyant_receive_array"]["deployment"],
+            "stowed",
+        )
+        self.assertEqual(
+            self.game["state"]["antennas"]["buoyant_receive_array"]["progress_minutes"],
+            0,
+        )
+        streamed = e.apply_order(self.game, self.order(
+            id="out", link="buoyant_receive", depth=200, speed=5, minutes=60,
+            interrupt_on=["antenna_deployed"]))
+        self.assertEqual(streamed["last_execution"]["elapsed_minutes"], 10)
+        self.assertEqual(
+            self.game["state"]["antennas"]["buoyant_receive_array"]["deployment"],
+            "streamed",
+        )
+        before = e.canonical(self.game)
+        with self.assertRaises(ValueError):
+            e.apply_order(self.game, self.order(
+                id="leave", activity="listen", depth=800, speed=5, minutes=5))
+        with self.assertRaises(ValueError):
+            e.apply_order(self.game, self.order(
+                id="mast", link="mast_receive", depth=70, speed=5))
+        self.assertEqual(before, e.canonical(self.game))
+        housed = e.apply_order(self.game, self.order(
+            id="house", activity="retrieve", link="buoyant_receive",
+            depth=200, speed=5, minutes=30))
+        self.assertEqual(housed["last_execution"]["stop_reason"], "task_complete")
+        self.assertEqual(housed["last_execution"]["elapsed_minutes"], 10)
+        self.assertEqual(
+            self.game["state"]["antennas"]["buoyant_receive_array"]["deployment"],
+            "stowed",
+        )
+        e.validate_order(self.order(
+            id="free", activity="listen", depth=800, speed=5, minutes=5,
+        ), self.game["state"])
+        self.assertTrue(e.verify(self.game)["verified"])
+
+    def test_retrieval_in_progress_rejects_another_receive(self):
+        e.apply_order(self.game, self.order(
+            id="out", link="buoyant_receive", depth=400, speed=5, minutes=10))
+        e.apply_order(self.game, self.order(
+            id="half", activity="retrieve", link="buoyant_receive",
+            depth=200, speed=5, minutes=5))
+        self.assertEqual(
+            self.game["state"]["antennas"]["buoyant_receive_array"]["deployment"],
+            "retrieving",
+        )
+        before = e.canonical(self.game)
+        with self.assertRaises(ValueError):
+            e.apply_order(self.game, self.order(
+                id="again", link="buoyant_receive", depth=200, speed=5))
+        self.assertEqual(before, e.canonical(self.game))
+        status = e.public_view(self.game)
+        self.assertEqual(status, e.public_view(self.game))
+        self.assertEqual(
+            status["own_ship"]["antennas"]["buoyant_receive_array"]["progress_minutes"],
+            5,
+        )
+        self.assertTrue(e.verify(self.game)["verified"])
 
 
 if __name__ == "__main__":

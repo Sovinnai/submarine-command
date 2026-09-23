@@ -70,6 +70,9 @@ retains shell access under the same account remains policy-only isolation.
 - A short nuclear patrol with no modeled reactor endurance constraint; diesel
   battery and snorkeling tradeoffs use explicit fictional rates.
 - A single auxiliary fault, a simple opposing reaction and no weapons-resolution model.
+- Mast-transmission exposure is a published range check on the shared
+  radio-window draw against surface combatants. It is not a separate propagation
+  model, and it does not change own-ship acoustic source level.
 - Surface traffic and biologics have bounded operating-state behavior, not full
   navigation, tactical doctrine or ecological simulation.
 

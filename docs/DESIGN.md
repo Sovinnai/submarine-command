@@ -23,7 +23,7 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
-In rules version 0.8, a command window is 5–60 minutes in five-minute increments.
+In rules version 0.9, a command window is 5–60 minutes in five-minute increments.
 Five minutes is the resolution at which the world reports and at which every
 random draw is keyed. Events are therefore located at step boundaries. Opposing
 decisions use start-of-step information, then every platform moves over the same
@@ -43,11 +43,12 @@ submarine changes depth with planes: coming shallow quickly also means going
 fast, and therefore being loud. A commanded operating mode takes effect only
 once actual speed and depth satisfy that mode's limits.
 
-An activity waits on achieved settings rather than ordered ones. Mast and link
-cycles need the whole five-minute step inside the mast envelope; repair credits
-only the minutes actually spent within its speed limit. An interrupt returns
-control without altering the commanded settings, and reports what was achieved
-against what was ordered.
+An activity waits on achieved settings rather than ordered ones. Mast
+observation needs the whole five-minute step inside the mast envelope. Each
+communications mode has its own depth and speed envelope and the same
+whole-step rule. Repair credits only the minutes actually spent within its
+speed limit. An interrupt returns control without altering the commanded
+settings, and reports what was achieved against what was ordered.
 
 The engine supplies no default for any order field. An unstated duration, depth,
 course, speed, plant lineup or interrupt policy is a rejected order, not an
@@ -57,11 +58,20 @@ Opposing entities are not rate-limited in this rules version. Their settings
 still change only at five-minute boundaries, and the capability report says so.
 Acoustic integration runs during every complete step, concurrently with movement
 and the selected equipment activity, and reports at its endpoint. An active pulse
-occupies the first integration step. Mast observation and each link attempt are
-five-minute deployment, operation and recovery cycles. A usable receive link or
-acknowledged transmission completes the communications task. Repair requires
-twenty productive minutes within its operating envelope and retains progress
-between command windows.
+occupies the first integration step. Mast observation is a five-minute
+deployment, operation and recovery cycle. Receive and transmit are separate
+communications modes. A mast cycle raises the mast, attempts the link, and
+houses it. The buoyant receive mode is receive-only: streaming and retrieval
+are timed separately, the antenna stays streamed until an explicit retrieve
+order, and a bulletin can be copied only after its scheduled time plus that
+mode's latency. A usable receive link or an acknowledged transmission completes
+the communications task. Channel quality is one shared draw per 20-minute
+window, so a repeated attempt in that window agrees with the earlier one. A
+completed mast transmission radiates; a surface combatant inside the published
+range may intercept it from that same draw. The transmission does not change
+own-ship acoustic source level. Copied traffic remains the dated report, which
+can be incomplete or wrong. Repair requires twenty productive minutes within
+its operating envelope and retains progress between command windows.
 
 At each boundary, exercise completion, task completion and selected interrupts
 return control. The execution receipt gives requested, actual and unused minutes

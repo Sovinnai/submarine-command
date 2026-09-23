@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.8.** The hidden-state and replay foundation
+**Status: early prototype, version 0.9.** The hidden-state and replay foundation
 works. Acoustic transmission uses a documented sound-speed profile and path
 approximations. Contact reports include measured narrowband frequencies, line
 quality and uncertainty. Array geometry is still simplified.
@@ -93,11 +93,13 @@ python -m submarine_command --session .sessions/my-patrol verify
 ```
 
 Supported activities are `listen`, `focus`, `active`, `mast`, `receive`,
-`transmit`, `repair`, and `end`. **Every field must be stated.** The engine
+`transmit`, `retrieve`, `repair`, and `end`. **Every field must be stated.** The engine
 supplies no default for any of them: an order missing `course`, `speed`,
 `depth`, `operating_mode`, `minutes`, `activity`, `interrupt_on` or
 `expected_turn` is rejected before anything changes, rather than being filled in
-from the current settings. An empty `interrupt_on` means no interrupt was
+from the current settings. `receive`, `transmit` and `retrieve` also require
+`link`, naming one published mode such as `mast_receive`, `mast_transmit` or
+`buoyant_receive`. An empty `interrupt_on` means no interrupt was
 selected, and an empty `basis` means the assessment cites no report. An `end`
 order takes only `id`, `expected_turn` and `activity`. Mode-specific and
 platform-wide envelopes are both validated. Orders run for 5–60 minutes in
@@ -122,25 +124,41 @@ Passive or focused observation integration runs concurrently and reports at the
 step endpoint. Active means one pulse during the first step, followed by passive
 listening.
 
-Mast observation and each communications attempt are five-minute deployment,
-operation, and recovery cycles concurrent with movement and passive observation.
-A usable receive link—whether or not a message is waiting—or an acknowledged
+Mast observation is a five-minute deployment, operation, and recovery cycle
+concurrent with movement and passive observation. Receive and transmit are
+separate modes. A mast link is also a five-minute cycle: the mast is raised,
+the link is attempted, and the mast is housed before the step ends. A usable
+receive link—whether or not a message is waiting—or an acknowledged
 transmission completes that task and returns control. A failed link consumes its
 five minutes and is retried during the same command window unless `radio_failure`
-is an interrupt. A cycle requires the whole step inside the mast envelope, so a
-step spent transiting toward mast depth is reported as `activity_deferred` with
-the achieved and ordered settings, and costs its five minutes. Repair requires 20
-productive minutes at 10 knots or less, counting only the minutes actually spent
-at or below that speed, persists across command windows, and is concurrent with
-movement and observation.
+is an interrupt. A cycle requires the whole step inside that mode's envelope, so
+a step spent transiting toward it is reported as `activity_deferred` with the
+achieved and ordered settings, and costs its five minutes.
+
+`buoyant_receive` is receive-only and is streamed below mast depth. Deployment
+takes its published ten minutes, retrieval takes another ten, and the antenna
+stays streamed until a `retrieve` order completes. While it is out, later
+orders have to remain inside its depth and speed envelope. A bulletin can be
+copied on that path only after its scheduled time plus the mode's published
+latency. The copied text is the dated report, which can be incomplete or wrong.
+Channel quality is one shared draw per 20-minute window, shifted by the mode's
+published reliability offset, so a repeated attempt in the same window agrees
+with the earlier one. A completed `mast_transmit` cycle radiates. A surface
+combatant inside the published intercept range can intercept that transmission
+from the same window draw. The radiation does not change own-ship acoustic
+source level. `own_ship.antennas` shows deployment state and progress.
+`platform_capabilities.communications` publishes every mode.
+
+Repair requires 20 productive minutes at 10 knots or less, counting only the
+minutes actually spent at or below that speed, persists across command windows,
+and is concurrent with movement and observation.
 The public `command_contract` reports these rules in machine-readable form.
 
 A transmission requires `assessment` (`submerged_present`,
 `surface_or_biologic`, or `unresolved`), a `message`, and a `basis` list of
 existing report IDs. Like every other field, `basis` must be stated: an empty
-list is the explicit declaration that the assessment cites no report. Link
-activity requires the published mast depth and speed envelope. These are in-game
-messages only.
+list is the explicit declaration that the assessment cites no report. The named link mode's published depth and speed envelope applies. These are
+in-game messages only. Transmission uses `mast_transmit`.
 
 Retry an uncertain operation using its **identical order JSON and id**. The engine
 returns the cached result without applying it again. A later order needs a new
@@ -163,7 +181,7 @@ verification. During active play, debrief refuses to reveal anything.
 | Sonar | Generic passive reception, focused analysis, active range measurement, and numeric narrowband frequencies with quality and uncertainty |
 | Observations | Noisy bearings, timestamped own positions, measured bearing drift and correlated evidence windows |
 | Environment | Hidden sound-speed profile, water depth and bottom; dated onboard estimate; frequency-dependent path approximations |
-| Communications | Mast receive/transmit with persistent link conditions |
+| Communications | Separate mast receive, mast transmit and buoyant receive modes; antenna state, latency, retrieval and a shared radio window |
 | Opposition | Limited-information detection and a simple evasive response |
 | Resources | Diesel battery use and snorkeling recharge, vessel fuel consumption, and persistent inventories advance on the shared clock |
 | Weapons | Fictional inventories are explicit; observation-only policy and unavailable employment are distinct |

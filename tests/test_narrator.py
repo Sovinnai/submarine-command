@@ -50,7 +50,7 @@ class NarratorInterfaceTests(unittest.TestCase):
         forbidden = {
             "seed", "actors", "actor", "kind", "spec", "rng_trace", "initial_state",
             "intent", "last_heard", "aware", "bearing_bias", "bulletins",
-            "radio_reliability", "true",
+            "radio_reliability", "radio_intercepts", "true",
         }
 
         def scan(item):
