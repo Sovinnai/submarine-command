@@ -15,13 +15,15 @@
 
 The current implementation combines most engine responsibilities in engine.py.
 The acoustic water column and transmission-loss approximations live in
-acoustics.py. Immutable entity definitions, observation-derived calculations and
+acoustics.py. Persistent emitter spectra and frequency measurements live in
+spectra.py. Immutable entity definitions, observation-derived calculations and
 process locking are separate modules. Vessel and biologic definitions use the
 same geometry, motion, operating-mode and signature contract. Optional resource,
 equipment and inventory components prevent biologics from acquiring meaningless
 vessel systems. docs/DESIGN.md defines the intended gameplay and abstraction
 contract; docs/ACOUSTICS.md records the transmission model, units and
-assumptions.
+assumptions; docs/SPECTRA.md records emitted signatures and the frequency
+measurement model.
 
 ## Randomness
 
@@ -59,8 +61,10 @@ retains shell access under the same account remains policy-only isolation.
 - Closed-form path approximations (direct, surface duct, half-channel, single
   bottom bounce, first CZ) rather than a ray or PE solver; each path is
   supported, uncertain or outside the model's scope.
-- Representative frequencies per contact domain rather than numeric spectra.
-- Categorical signature evidence rather than numeric narrowband spectra.
+- Representative frequencies remain for path-scope display and for opposing
+  detection of own ship. Contact reception uses numeric narrowband spectra.
+- Opposing detection of own ship follows speed, not the narrowband signature
+  or own-ship operating mode.
 - Crew disagreement from different priors applied to shared evidence.
 - Descriptive endpoint bearing drift rather than a TMA fit or statistical solution.
 - A short nuclear patrol with no modeled reactor endurance constraint; diesel
