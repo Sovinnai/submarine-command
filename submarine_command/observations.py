@@ -42,6 +42,10 @@ SUPERVISOR_SIGMA = 3.0
 # Larger than a reversal at the published speed bounds, so a bigger fractional
 # shift is an emitted-frequency change rather than Doppler.
 DOPPLER_FRACTION_LIMIT = 0.03
+# Same-line pairing. Wider than the Doppler cue so a modest residual still
+# compares as one line; narrower than a harmonic jump.
+SAME_LINE_ASSOCIATION_FRACTION = 0.10
+# Family-wide jumps (blade rate, missing harmonic) when no line stayed put.
 LINE_ASSOCIATION_FRACTION = 0.75
 _RANGE_INDEX = {value: index for index, value in enumerate(RANGE_GRID_NM)}
 _SPEED_INDEX = {value: index for index, value in enumerate(SPEED_GRID_KN)}
@@ -129,16 +133,23 @@ def frequency_change_model():
         "operator_sigma": OPERATOR_SIGMA,
         "supervisor_sigma": SUPERVISOR_SIGMA,
         "doppler_fraction_limit": DOPPLER_FRACTION_LIMIT,
+        "same_line_association_fraction": SAME_LINE_ASSOCIATION_FRACTION,
         "line_association_fraction": LINE_ASSOCIATION_FRACTION,
         "correlation_window_minutes": spectra.CORRELATION_WINDOW_MINUTES,
         "comparison": (
-            "Successive measured lines are matched in frequency order. The "
-            "frequency change is reduced by the own-ship closing-speed change "
-            f"recorded as course and speed at each look, at {SOUND_SPEED_MPS:g} m/s. "
-            "A pair with no recorded speed is not corrected. Inside one evidence "
-            "window the shared frequency bias and the reused per-line processing "
-            "sample cancel. Across a window boundary the full reported uncertainties "
-            "apply, so a small shift can stay inside the gate until a later look."
+            "Successive measured lines are paired closest-first. A pair within "
+            f"{SAME_LINE_ASSOCIATION_FRACTION:.0%} is the same line. If any line "
+            "stayed put, leftover tones are unmatched rather than a frequency "
+            f"jump. Only when no line stayed put are equal-count lists paired in "
+            f"frequency order within {LINE_ASSOCIATION_FRACTION:.0%} as a "
+            "family-wide emitted change, such as blade rate. The frequency "
+            "change is reduced by the "
+            "own-ship closing-speed change recorded as course and speed at each "
+            f"look, at {SOUND_SPEED_MPS:g} m/s. A pair with no recorded speed is "
+            "not corrected. Inside one evidence window the shared frequency bias "
+            "and the reused per-line processing sample cancel. Across a window "
+            "boundary the full reported uncertainties apply, so a small shift can "
+            "stay inside the gate until a later look."
         ),
         "cue": (
             "A residual inside the role's sigma gate is within error. A larger "
@@ -1139,19 +1150,14 @@ def _difference_sigma_hz(left, right, same_window):
     )
 
 
-def _match_lines(earlier, later):
-    earlier = sorted(earlier, key=lambda line: line["measured_hz"])
-    later = sorted(later, key=lambda line: line["measured_hz"])
+def _within_fraction(left, right, fraction):
+    return abs(left["measured_hz"] - right["measured_hz"]) <= (
+        fraction * min(left["measured_hz"], right["measured_hz"])
+    )
 
-    def within(left, right):
-        return abs(left["measured_hz"] - right["measured_hz"]) <= (
-            LINE_ASSOCIATION_FRACTION * min(left["measured_hz"], right["measured_hz"])
-        )
 
-    if earlier and len(earlier) == len(later) and all(
-        within(left, right) for left, right in zip(earlier, later)
-    ):
-        return list(zip(earlier, later)), 0, 0
+def _greedy_line_pairs(earlier, later, fraction):
+    """Closest unpaired lines whose frequencies differ by at most fraction."""
     pairs = sorted(
         (
             (abs(left["measured_hz"] - right["measured_hz"]), left_index, right_index)
@@ -1165,12 +1171,44 @@ def _match_lines(earlier, later):
     for _difference, left_index, right_index in pairs:
         if left_index in used_left or right_index in used_right:
             continue
-        if not within(earlier[left_index], later[right_index]):
+        if not _within_fraction(earlier[left_index], later[right_index], fraction):
             continue
         used_left.add(left_index)
         used_right.add(right_index)
         matched.append((earlier[left_index], later[right_index]))
     return matched, len(earlier) - len(used_left), len(later) - len(used_right)
+
+
+def _frequency_order_pairs(earlier, later, fraction):
+    """Pair sorted lists in frequency order when every pair is inside the gate."""
+    if not earlier or len(earlier) != len(later):
+        return None
+    zipped = list(zip(earlier, later))
+    if all(_within_fraction(left, right, fraction) for left, right in zipped):
+        return zipped, 0, 0
+    return None
+
+
+def _match_lines(earlier, later):
+    """Pair the same line first; only then allow a family-wide jump.
+
+    A leftover tone beside a stable line is a detection appearing or dropping,
+    not an emitted-frequency change of the stable family. A blade-rate jump
+    moves every resolved line, so the wide gate applies only when nothing
+    stayed within the same-line fraction, and those jumps are paired in
+    frequency order rather than by nearest hertz.
+    """
+    earlier = sorted(earlier, key=lambda line: line["measured_hz"])
+    later = sorted(later, key=lambda line: line["measured_hz"])
+    matched, unmatched_earlier, unmatched_later = _greedy_line_pairs(
+        earlier, later, SAME_LINE_ASSOCIATION_FRACTION
+    )
+    if matched:
+        return matched, unmatched_earlier, unmatched_later
+    ordered = _frequency_order_pairs(earlier, later, LINE_ASSOCIATION_FRACTION)
+    if ordered is not None:
+        return ordered
+    return _greedy_line_pairs(earlier, later, LINE_ASSOCIATION_FRACTION)
 
 
 def _frequency_cue(sigma_ratio, fractional):

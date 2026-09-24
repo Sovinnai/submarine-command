@@ -125,7 +125,8 @@ step endpoint. Active means one pulse during the first step, followed by passive
 listening.
 
 Mast observation is a five-minute deployment, operation, and recovery cycle
-concurrent with movement and passive observation. Receive and transmit are
+concurrent with movement and passive observation. A completed cycle reports
+each visual contact or an explicit negative when none was seen. Receive and transmit are
 separate modes. A mast link is also a five-minute cycle: the mast is raised,
 the link is attempted, and the mast is housed before the step ends. A usable
 receive link—whether or not a message is waiting—or an acknowledged

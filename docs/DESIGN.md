@@ -59,7 +59,8 @@ still change only at five-minute boundaries, and the capability report says so.
 Acoustic integration runs during every complete step, concurrently with movement
 and the selected equipment activity, and reports at its endpoint. An active pulse
 occupies the first integration step. Mast observation is a five-minute
-deployment, operation and recovery cycle. Receive and transmit are separate
+deployment, operation and recovery cycle. A completed mast cycle reports each
+visual contact or an explicit negative. Receive and transmit are separate
 communications modes. A mast cycle raises the mast, attempts the link, and
 houses it. The buoyant receive mode is receive-only: streaming and retrieval
 are timed separately, the antenna stays streamed until an explicit retrieve
@@ -150,13 +151,18 @@ A visual observation replaces the acoustic update for both roles.
 
 A separate frequency indication compares successive measured lines. It removes
 the own-ship closing-speed change recorded as course and speed at each look.
-The operator calls a change at 2 sigma and the supervisor at 3 sigma, so one
-role can hear it before the other, and a later look can cross the higher
-gate. Inside one 20-minute evidence window the shared frequency bias and the
-reused per-line processing error cancel, which is why that window stays longer
-than the five-minute step: a new draw every step would hide a small shift. A
-residual inside the gate is not called. A residual larger than the published
-Doppler bound is read as an emitted-frequency change. Received level does not depend on bow, beam, or stern aspect.
+Lines that stayed within a published same-line fraction are the same tone; a
+leftover detection beside those is unmatched, not a machinery change. A
+family-wide jump is called only when no line stayed put, and those jumps are
+paired in frequency order. The operator calls a
+change at 2 sigma and the supervisor at 3 sigma, so one role can hear it before
+the other, and a later look can cross the higher gate. Inside one 20-minute
+evidence window the shared frequency bias and the reused per-line processing
+error cancel, which is why that window stays longer than the five-minute step:
+a new draw every step would hide a small shift. A residual inside the gate is
+not called. A residual larger than the published Doppler bound is read as an
+emitted-frequency change. Received level does not depend on bow, beam, or stern
+aspect.
 
 ## What makes a good session
 
