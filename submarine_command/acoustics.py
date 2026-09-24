@@ -38,8 +38,9 @@ Deliberate simplifications
 - Direct, surface-duct, half-channel, single bottom-bounce and first-CZ paths
   are evaluated independently; the lowest-loss contributing path is used.
   Coherent summation, a full image series and a ray solver are out of scope.
-- Array geometry is a receiver depth and a fictional directivity index. Hull
-  reception is at the platform depth; a towed array is not a receiver yet.
+- Array geometry is published per receiver: coverage in relative bearing,
+  frequency response, self-noise family, and a depth that is either keel depth
+  or a documented keel offset. Towed-array cable shape is not calculated.
 - Own-ship source level for opposing detection follows speed, not operating
   mode. Mode-derived radiated noise is a separate rules change.
 """
@@ -47,6 +48,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+
+from . import arrays
 
 
 METERS_PER_FOOT = 0.3048
@@ -676,9 +679,19 @@ def self_noise_adjustment_db(speed_knots, pump_fault=False):
     return -10.0 * math.log10(factor) + extra
 
 
-def noise_level_db(frequency_hz, speed_knots, pump_fault=False, baseline=AMBIENT_NL_AT_1KHZ_DB):
-    return ambient_noise_db(frequency_hz, baseline) + self_noise_adjustment_db(
-        speed_knots, pump_fault
+def noise_level_db(
+    frequency_hz,
+    speed_knots,
+    pump_fault=False,
+    baseline=AMBIENT_NL_AT_1KHZ_DB,
+    array_spec=None,
+    unstable=False,
+):
+    ambient = ambient_noise_db(frequency_hz, baseline)
+    if array_spec is None:
+        return ambient + self_noise_adjustment_db(speed_knots, pump_fault)
+    return ambient + arrays.self_noise_adjustment_db(
+        array_spec, speed_knots, pump_fault, unstable=unstable
     )
 
 
@@ -703,19 +716,20 @@ def reception_strength(signal_excess):
     return "weak"
 
 
-def receiving_array(entity):
-    """Hull receiver at the platform depth. Towed-array geometry is not modeled."""
-    equipment = entity.get("equipment", {})
-    return {
-        "id": "integrated_passive",
-        "depth_feet": entity["depth"],
-        "directivity_index_db": HULL_DIRECTIVITY_DB,
-        "state": equipment.get("integrated_passive", "available"),
-        "note": (
-            "Combined hull reception at present keel depth. A towed array is "
-            "carried but is not a modeled receiver in this rules version."
-        ),
-    }
+def receiving_array(entity, array_id=None, water_depth_feet=2000.0, true_bearing_deg=None, unstable=False):
+    """Snapshot of one receiver. Platforms without a suite use a hull-like default."""
+    platform_id = entity.get("spec")
+    if array_id is None:
+        suite = arrays.suite_for(platform_id)
+        array_id = suite[0].identifier if suite else arrays.GENERIC_HULL.identifier
+    spec = arrays.array_spec(platform_id, array_id)
+    return arrays.snapshot(
+        spec,
+        entity,
+        true_bearing_deg=true_bearing_deg,
+        water_depth_feet=water_depth_feet,
+        unstable=unstable,
+    )
 
 
 def _bottom_public(bottom_type):
@@ -961,8 +975,11 @@ def public_environment(environment, elapsed_minutes):
         "representative_frequencies_hz": frequencies,
         "path_model": scope,
         "receiver": (
-            "Hull array at present keel depth. Changing depth uses this same "
-            "estimated column; the engine adjudicates with the hidden true column."
+            "Hull and flank receivers are at present keel depth. A streamed "
+            "towed array uses keel depth plus a published offset, clipped to "
+            "stay in the water column. Changing depth uses this same estimated "
+            "column; the engine adjudicates with the hidden true column. "
+            "Towed-array cable shape is not calculated."
         ),
     }
 

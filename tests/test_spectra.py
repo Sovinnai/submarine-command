@@ -202,7 +202,12 @@ class MeasurementTests(unittest.TestCase):
             self._measure(right, dice=dice),
         )
         biases = {line["shared_bias_fraction"] for result in both for line in result["detail"]["lines"]}
-        self.assertEqual(biases, {spectra.window_fractional_bias(engine.Dice("56" * 32, []), self.state["t"])})
+        self.assertEqual(
+            biases,
+            {spectra.window_fractional_bias(
+                engine.Dice("56" * 32, []), self.state["t"], "hull_array"
+            )},
+        )
 
     def test_a_look_cannot_report_a_line_the_emitter_does_not_have(self):
         source = place(DART, id="dart", x=0.0, y=0.8, speed=5, depth=300, operating_mode="battery")
