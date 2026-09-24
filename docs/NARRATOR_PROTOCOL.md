@@ -79,7 +79,9 @@ intends to keep. Because a maneuver takes simulated time, `own_ship.maneuver`
 reports the commanded value beside the achieved one: restate the commanded
 value to continue a maneuver in progress, not the achieved value, which would
 level the boat off where it is. `own_ship.antennas` reports deployment and
-progress for each implemented antenna.
+progress for each implemented antenna. `own_ship.sonar_receivers` and
+`own_ship.towed_array` report array depth, coverage and towed deployment.
+`stream_array` and `recover_array` are the towed-array activities.
 Retrying exactly the same order is idempotent. Reusing its ID for different
 content, or sending a new order for a stale turn, is rejected before state
 mutation.

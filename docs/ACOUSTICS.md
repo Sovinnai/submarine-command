@@ -1,6 +1,6 @@
 # Acoustic environment
 
-This is the implemented transmission model for rules version 0.11. It is
+This is the implemented transmission model for rules version 0.12. It is
 idealized physics for a turn-based game. It does not reproduce classified
 sonar performance or a research-grade ocean-acoustics solver.
 
@@ -113,8 +113,19 @@ Path-scope reports and opposing detection of own ship still use representative
 frequencies: 120 Hz submerged, 80 Hz surface, 2500 Hz biologic and 3500 Hz
 active.
 
-Receiver depth is the platform's present keel depth. Changing depth changes
-loss through this same environment. A towed array is inventory only.
+Receiver depth depends on the listening array. Hull and flank use the
+platform's present keel depth. A streamed towed array uses keel depth plus a
+published offset, clipped to stay in the water column. Changing depth changes
+loss through this same environment. Coverage is relative bearing: a baffle
+produces no kept observation; towed endfire still receives with reduced
+directivity. Towed-array cable shape, layback and a displaced array position
+are not calculated. Opposing detection of own ship still uses a hull-like
+receiver at the opponent's keel depth.
+
+Own-ship contact reports name the receiver and the shared error sources. Hull
+and flank share own-ship-mounted self-noise. The towed array does not. A track
+is one receiver's history; detections on another receiver are not automatically
+the same contact.
 
 Opposing detection uses the same TL function. Own-ship source level still
 follows speed rather than operating mode.
@@ -148,3 +159,7 @@ contact. Repeated looks inside that window are not independent evidence.
   thermocline does not.
 - Transmission loss is reciprocal in source and receiver depth.
 - Public status exposes the measured profile, never the true column.
+- Hull has an aft baffle; flank has bow and stern gaps; towed endfire still
+  receives with reduced directivity.
+- Towed receiver depth is keel plus the published offset, not a cable solution.
+- Hull and flank detections of the same emitter are separate contact histories.

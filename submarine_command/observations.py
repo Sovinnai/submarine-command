@@ -72,11 +72,13 @@ def motion_model():
         ),
         "acoustic_bias_step_degrees": ACOUSTIC_BIAS_STEP_DEGREES,
         "correlation": (
-            "Passive, focus and active bearings share one bias of at most 2 degrees, "
+            "Passive, focus and active bearings on one receiver share one bias of at most 2 degrees, "
             "searched in steps of 0.5 degrees, then in steps of 0.1 degrees beside any "
             "step that lands within 1 degree of a gate. Bearings that share an evidence window "
             "contribute one bearing constraint, so a repeated bearing does not tighten "
-            "that gate and cannot by itself make the geometry constrained."
+            "that gate and cannot by itself make the geometry constrained. A track is one "
+            "receiver's history; hull, flank and towed detections are not automatically "
+            "the same contact."
         ),
         "baseline": (
             "The family is called constrained only when the smallest arc containing "

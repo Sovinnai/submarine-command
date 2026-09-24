@@ -15,6 +15,7 @@ import math
 from dataclasses import dataclass
 
 from . import acoustics
+from . import arrays
 from .platforms import get_spec
 
 
@@ -23,8 +24,9 @@ CORRELATION_WINDOW_MINUTES = 20
 
 # Shared fractional frequency bias, uniform over ± this bound, one draw per
 # window for every line and every contact. It stands in for a common
-# sound-speed and receiver-calibration error.
+# sound-speed error. Each receiver adds a smaller calibration bias.
 BIAS_FRACTION_BOUND = 0.0015
+ARRAY_BIAS_FRACTION_BOUND = 0.0008
 
 # Unresolved radial rate used only to widen the reported uncertainty.
 MOTION_UNCERTAINTY_KNOTS = 0.4
@@ -266,10 +268,11 @@ def public_model():
         },
         "correlation_window_minutes": CORRELATION_WINDOW_MINUTES,
         "signal_excess": (
-            "SL - TL - NL + DI - DT. TL is the shared transmission-loss model "
-            "at the line frequency. NL is ambient plus own-ship self-noise, "
-            "power-summed with broadband from the same emitter when that "
-            "broadband covers the line. DT is "
+            "SL - TL - NL + DI - DT, plus the receiver's published frequency "
+            "response. TL is the shared transmission-loss model at the line "
+            "frequency and that receiver's depth. NL is ambient plus that "
+            "receiver's self-noise, power-summed with broadband from the same "
+            "emitter when that broadband covers the line. DT is "
             f"{NARROWBAND_DT_DB:g} dB for a line and {BROADBAND_DT_DB:g} dB "
             "for an analysis band."
         ),
@@ -287,17 +290,22 @@ def public_model():
         "shared_errors": (
             "Each "
             f"{CORRELATION_WINDOW_MINUTES:g}-minute window draws one "
-            "environmental quality offset, applied to every contact, and one "
-            f"fractional frequency bias of ±{BIAS_FRACTION_BOUND:g}, applied "
-            "to every measured line. A later look in that window reuses both "
-            "draws. Re-reading a stored report does not draw again."
+            "environmental quality offset, applied to every contact and every "
+            "receiver, and one fractional frequency bias of "
+            f"±{BIAS_FRACTION_BOUND:g}, applied to every measured line. Each "
+            "receiver adds its own calibration bias of "
+            f"±{ARRAY_BIAS_FRACTION_BOUND:g}. A later look in that window on "
+            "the same receiver reuses those draws. Re-reading a stored report "
+            "does not draw again."
         ),
         "uncertainty": (
             "Reported one-sigma frequency is the root-sum-square of "
-            "1/(T*sqrt(2*SNR)), the root-mean-square of the shared fractional "
-            f"bias, and f*{MOTION_UNCERTAINTY_KNOTS:g} kn / c for unresolved "
+            "1/(T*sqrt(2*SNR)), the root-mean-square of the environmental and "
+            "array fractional biases, and "
+            f"f*{MOTION_UNCERTAINTY_KNOTS:g} kn / c for unresolved "
             "radial motion. SNR is the processing ratio SL - TL - NL + DI, "
-            "including the shared window offset. T is the integration time."
+            "including the shared window offset and the receiver frequency "
+            "response. T is the integration time."
         ),
         "integration_seconds": dict(INTEGRATION_SECONDS),
         "analysis_bands_hz": [
@@ -472,24 +480,32 @@ def window_index(elapsed_minutes):
     return int(elapsed_minutes) // CORRELATION_WINDOW_MINUTES
 
 
-def window_fractional_bias(dice, elapsed_minutes):
-    """One shared fractional bias for the whole acoustic window."""
-    return dice.between(
+def window_fractional_bias(dice, elapsed_minutes, array_id=None):
+    """Environmental bias plus an optional per-receiver calibration bias."""
+    shared = dice.between(
         f"spectrum-bias:{window_index(elapsed_minutes)}",
         -BIAS_FRACTION_BOUND,
         BIAS_FRACTION_BOUND,
     )
+    if not array_id:
+        return shared
+    array_bias = dice.between(
+        f"spectrum-bias:{window_index(elapsed_minutes)}:{array_id}",
+        -ARRAY_BIAS_FRACTION_BOUND,
+        ARRAY_BIAS_FRACTION_BOUND,
+    )
+    return shared + array_bias
 
 
-def line_error_sample(dice, emitter_id, line_id, elapsed_minutes):
-    """Zero-mean unit-variance processing sample, fixed for one line and window.
+def line_error_sample(dice, emitter_id, line_id, elapsed_minutes, array_id="hull"):
+    """Zero-mean unit-variance processing sample, fixed for one line, receiver and window.
 
     The stored draw is uniform on [-1, 1]. That distribution has standard
     deviation 1/sqrt(3), so the sample is scaled by sqrt(3). Multiplying the
     result by the Cramér–Rao term then has the one-sigma width the report states.
     """
     uniform = dice.between(
-        f"spectrum-line:{emitter_id}:{line_id}:{window_index(elapsed_minutes)}",
+        f"spectrum-line:{emitter_id}:{line_id}:{array_id}:{window_index(elapsed_minutes)}",
         -1.0,
         1.0,
     )
@@ -534,7 +550,9 @@ def cramer_rao_hz(snr_db, integration_seconds):
 
 def frequency_uncertainty_hz(frequency_hz, snr_db, integration_seconds, sound_speed_m_s):
     sigma_cr = cramer_rao_hz(snr_db, integration_seconds)
-    sigma_bias = frequency_hz * BIAS_FRACTION_BOUND / math.sqrt(3.0)
+    sigma_bias = frequency_hz * math.hypot(
+        BIAS_FRACTION_BOUND, ARRAY_BIAS_FRACTION_BOUND
+    ) / math.sqrt(3.0)
     sigma_motion = (
         frequency_hz
         * (MOTION_UNCERTAINTY_KNOTS * KNOTS_TO_METERS_PER_SECOND)
@@ -567,8 +585,7 @@ def _band_overlap(low_a, high_a, low_b, high_b):
     return high - low, 0.5 * (low + high)
 
 
-def _loss_db(state, source, receiver, frequency_hz):
-    array = acoustics.receiving_array(receiver)
+def _loss_db(state, source, receiver, frequency_hz, array):
     loss = acoustics.transmission_loss(
         state["environment"]["true"],
         _range_nm(source, receiver),
@@ -583,19 +600,25 @@ def _range_nm(source, receiver):
     return math.hypot(source["x"] - receiver["x"], source["y"] - receiver["y"])
 
 
-def _receiver_noise_db(state, receiver, frequency_hz, own_ship):
+def _receiver_noise_db(state, receiver, frequency_hz, own_ship, array_spec=None, unstable=False):
     pump = bool(state.get("pump_fault")) and receiver.get("id") == own_ship.get("id")
-    return acoustics.noise_level_db(frequency_hz, receiver["speed"], pump)
+    return acoustics.noise_level_db(
+        frequency_hz,
+        receiver["speed"],
+        pump,
+        array_spec=array_spec,
+        unstable=unstable,
+    )
 
 
-def _masking_db(state, source, receiver, broadband, frequency_hz):
+def _masking_db(state, source, receiver, broadband, frequency_hz, array):
     densities = []
     for shape in broadband:
         if not (shape["low_hz"] <= frequency_hz <= shape["high_hz"]):
             continue
         bandwidth = max(shape["high_hz"] - shape["low_hz"], 1.0)
         spectrum_level = shape["band_level_db"] - 10.0 * math.log10(bandwidth)
-        loss = _loss_db(state, source, receiver, frequency_hz)
+        loss = _loss_db(state, source, receiver, frequency_hz, array)
         if loss is None:
             continue
         densities.append(spectrum_level - loss)
@@ -609,7 +632,19 @@ def _component_excess(source_level, loss_db, noise_db, directivity, threshold, w
     return excess + window_db
 
 
-def measure_contact(state, source, receiver, mode, dice, extra_di=0.0, focused=False, window_db=0.0):
+def measure_contact(
+    state,
+    source,
+    receiver,
+    mode,
+    dice,
+    extra_di=0.0,
+    focused=False,
+    window_db=0.0,
+    array=None,
+    array_spec=None,
+    unstable=False,
+):
     """Measure the current emitted spectrum. Random draws are keyed by window.
 
     Calling this again in the same window reuses the bias, the per-line error
@@ -619,28 +654,41 @@ def measure_contact(state, source, receiver, mode, dice, extra_di=0.0, focused=F
     """
     emitted = emitted_components(source)
     elapsed = state["t"]
-    bias = window_fractional_bias(dice, elapsed)
-    array = acoustics.receiving_array(receiver)
+    water = state["environment"]["true"]["water_depth_feet"]
+    if array_spec is None:
+        array_id = None if array is None else array.get("id")
+        array_spec = arrays.array_spec(receiver.get("spec"), array_id)
+    if array is None:
+        array = arrays.snapshot(
+            array_spec, receiver, water_depth_feet=water, unstable=unstable,
+        )
+    array_id = array["id"]
+    bias = window_fractional_bias(dice, elapsed, array_id)
     sound_speed = acoustics.interpolate_ssp(
         state["environment"]["true"]["sound_speed_profile"],
         acoustics.feet_to_meters(array["depth_feet"]),
     )
-    directivity = array["directivity_index_db"] + extra_di
     duration = integration_seconds(mode, focused)
     detailed_lines = []
     for line in emitted["lines"]:
         frequency = line["emitted_hz"]
-        loss = _loss_db(state, source, receiver, frequency)
-        ambient = _receiver_noise_db(state, receiver, frequency, state["own"])
-        masking = _masking_db(state, source, receiver, emitted["broadband"], frequency)
+        gain = arrays.frequency_gain_db(array_spec, frequency)
+        directivity = array["directivity_index_db"] + extra_di + gain
+        loss = _loss_db(state, source, receiver, frequency, array)
+        ambient = _receiver_noise_db(
+            state, receiver, frequency, state["own"], array_spec, unstable,
+        )
+        masking = _masking_db(
+            state, source, receiver, emitted["broadband"], frequency, array,
+        )
         noise = ambient if masking is None else _power_sum_db([ambient, masking])
         snr = processing_snr_db(line["source_level_db"], loss, noise, directivity) + window_db
         excess = _component_excess(
             line["source_level_db"], loss, noise, directivity, NARROWBAND_DT_DB, window_db
         )
-        sample = line_error_sample(dice, source["id"], line["line_id"], elapsed)
+        sample = line_error_sample(dice, source["id"], line["line_id"], elapsed, array_id)
         detected = dice.u(
-            f"spectrum-detect:{source['id']}:{line['line_id']}:{window_index(elapsed)}"
+            f"spectrum-detect:{source['id']}:{line['line_id']}:{array_id}:{window_index(elapsed)}"
         ) < acoustics.detection_probability(excess)
         sigma_cr = cramer_rao_hz(snr, duration)
         uncertainty = frequency_uncertainty_hz(frequency, snr, duration, sound_speed)
@@ -667,7 +715,7 @@ def measure_contact(state, source, receiver, mode, dice, extra_di=0.0, focused=F
                 continue
             emitted_width = max(shape["high_hz"] - shape["low_hz"], 1.0)
             source_level = shape["band_level_db"] + 10.0 * math.log10(width / emitted_width)
-            loss = _loss_db(state, source, receiver, center)
+            loss = _loss_db(state, source, receiver, center, array)
             if loss is None:
                 continue
             parts.append(source_level - loss)
@@ -680,12 +728,16 @@ def measure_contact(state, source, receiver, mode, dice, extra_di=0.0, focused=F
         # across the band.
         received = _power_sum_db(parts)
         center = 0.5 * (low + high)
-        noise = _receiver_noise_db(state, receiver, center, state["own"])
+        gain = arrays.frequency_gain_db(array_spec, center)
+        directivity = array["directivity_index_db"] + extra_di + gain
+        noise = _receiver_noise_db(
+            state, receiver, center, state["own"], array_spec, unstable,
+        )
         excess = _component_excess(
             received, 0.0, noise, directivity, BROADBAND_DT_DB, window_db,
         )
         detected = dice.u(
-            f"spectrum-broadband:{source['id']}:{int(low)}:{window_index(elapsed)}"
+            f"spectrum-broadband:{source['id']}:{int(low)}:{array_id}:{window_index(elapsed)}"
         ) < acoustics.detection_probability(excess)
         detailed_bands.append({
             "low_hz": low,
