@@ -34,6 +34,11 @@ class Propulsion(str, Enum):
     BIOLOGICAL = "biological_locomotion"
 
 
+class LinkDirection(str, Enum):
+    RECEIVE = "receive"
+    TRANSMIT = "transmit"
+
+
 @dataclass(frozen=True)
 class OperatingEnvelope:
     minimum_speed_knots: float
@@ -148,6 +153,107 @@ class ResourceModel:
 
 
 @dataclass(frozen=True)
+class CommunicationMode:
+    """One implemented receive or transmit path.
+
+    Reception and transmission are separate modes even when they share an
+    antenna. A mode is advertised only when its cycle, envelope, latency and
+    retrieval behavior are resolved by the engine.
+    """
+
+    identifier: str
+    antenna: str
+    direction: LinkDirection
+    description: str
+    minimum_depth_feet: float
+    maximum_depth_feet: float
+    maximum_speed_knots: float
+    cycle_minutes: int
+    deployment_minutes: int
+    retrieval_minutes: int
+    latency_minutes: int
+    emits: bool
+    persists_deployed: bool
+    reliability_offset: float
+    intercept_range_nm: float | None = None
+    intercept_margin: float = 0.0
+
+    def allows(self, depth_feet, speed_knots):
+        return (
+            self.minimum_depth_feet <= depth_feet <= self.maximum_depth_feet
+            and 0 <= speed_knots <= self.maximum_speed_knots
+        )
+
+    def public_definition(self):
+        if self.persists_deployed:
+            retrieval_rule = (
+                "Deployment and retrieval each require their published minutes "
+                "in whole five-minute steps inside this envelope. The antenna "
+                "stays streamed, and later orders must remain inside the "
+                "envelope, until a retrieve order completes. The antenna is "
+                "not housed as a side effect of another order."
+            )
+        else:
+            retrieval_rule = (
+                "Raising, the link attempt, and housing all occur inside the "
+                "five-minute cycle. This mode has no separate retrieve order."
+            )
+        emission = {
+            "radiates": self.emits,
+            "acoustic_source_level_change": False,
+        }
+        if self.emits:
+            emission.update(
+                {
+                    "intercept_range_nm": self.intercept_range_nm,
+                    "intercept_margin": self.intercept_margin,
+                    "intercept_applies_to": ["surface_warship"],
+                    "intercept_rule": (
+                        "A completed transmitting cycle radiates at the step "
+                        "endpoint. A surface combatant inside intercept_range_nm "
+                        "intercepts when the shared radio-window draw is below "
+                        "the link threshold plus intercept_margin. The draw is "
+                        "not repeated for the intercept, and own-ship acoustic "
+                        "source level is unchanged."
+                    ),
+                }
+            )
+        return {
+            "id": self.identifier,
+            "antenna": self.antenna,
+            "direction": self.direction.value,
+            "description": self.description,
+            "envelope": {
+                "minimum_depth_feet": self.minimum_depth_feet,
+                "maximum_depth_feet": self.maximum_depth_feet,
+                "maximum_speed_knots": self.maximum_speed_knots,
+            },
+            "cycle_minutes": self.cycle_minutes,
+            "deployment_minutes": self.deployment_minutes,
+            "retrieval_minutes": self.retrieval_minutes,
+            "persists_deployed": self.persists_deployed,
+            "retrieval_rule": retrieval_rule,
+            "latency_minutes": self.latency_minutes,
+            "latency_rule": (
+                "A bulletin can be copied only at or after its scheduled time "
+                "plus this latency. The copied text is that dated report."
+            ),
+            "channel": {
+                "window_minutes": 20,
+                "reliability_offset": self.reliability_offset,
+                "rule": (
+                    "Link success compares the shared 20-minute radio-window "
+                    "draw with the hidden patrol reliability plus this offset. "
+                    "The draw is shared by every mode. A repeated attempt in "
+                    "the same window and mode therefore succeeds or fails "
+                    "together with the earlier attempt."
+                ),
+            },
+            "emission": emission,
+        }
+
+
+@dataclass(frozen=True)
 class Equipment:
     identifier: str
     description: str
@@ -192,6 +298,7 @@ class EntitySpec:
     default_mode: str
     sensors: tuple[Equipment, ...] = ()
     communications: tuple[Equipment, ...] = ()
+    communication_modes: tuple[CommunicationMode, ...] = ()
     weapons: tuple[InventoryItem, ...] = ()
     countermeasures: tuple[InventoryItem, ...] = ()
     resources: tuple[ResourceModel, ...] = ()
@@ -206,6 +313,17 @@ class EntitySpec:
         except StopIteration as error:
             raise ValueError(
                 f"{identifier!r} is not an operating mode for {self.class_name}."
+            ) from error
+
+    def link_mode(self, identifier):
+        try:
+            return next(
+                mode for mode in self.communication_modes
+                if mode.identifier == identifier
+            )
+        except StopIteration as error:
+            raise ValueError(
+                f"{identifier!r} is not a communications mode for {self.class_name}."
             ) from error
 
     def initial_components(self):
@@ -240,6 +358,9 @@ class EntitySpec:
             "communications_inventory": [
                 item.public_definition() for item in self.communications
             ],
+            "communication_modes": [
+                mode.public_definition() for mode in self.communication_modes
+            ],
             "weapons_inventory": [
                 item.public_definition() for item in self.weapons
             ],
@@ -271,16 +392,7 @@ class EntitySpec:
                     "separate_array_geometry_modeled": False,
                     "spectral_frequencies_modeled": True,
                 },
-                "communications": {
-                    "transmit": "mast only",
-                    "receive": "mast only",
-                    "mast_envelope": asdict(self.mast) if self.mast else None,
-                    "inventory": [
-                        item.public_definition() for item in self.communications
-                    ],
-                    "submerged_reception_modeled": False,
-                    "buoyant_array_modeled": False,
-                },
+                "communications": self.public_communications(),
                 "environment": capability_environment(),
                 "weapons": {
                     "loadout_modeled": True,
@@ -319,6 +431,54 @@ class EntitySpec:
             }
         )
         return result
+
+    def public_communications(self):
+        receive = [
+            mode.identifier for mode in self.communication_modes
+            if mode.direction == LinkDirection.RECEIVE
+        ]
+        transmit = [
+            mode.identifier for mode in self.communication_modes
+            if mode.direction == LinkDirection.TRANSMIT
+        ]
+        buoyant = any(
+            mode.antenna == "buoyant_receive_array"
+            for mode in self.communication_modes
+        )
+        submerged = any(
+            mode.persists_deployed and mode.direction == LinkDirection.RECEIVE
+            for mode in self.communication_modes
+        )
+        return {
+            "receive_modes": receive,
+            "transmit_modes": transmit,
+            "modes": [
+                mode.public_definition() for mode in self.communication_modes
+            ],
+            "mast_envelope": asdict(self.mast) if self.mast else None,
+            "inventory": [
+                item.public_definition() for item in self.communications
+            ],
+            "submerged_reception_modeled": submerged,
+            "buoyant_array_modeled": buoyant,
+            "channel_window_minutes": 20,
+        }
+
+
+_KESTREL_MAST = MastEnvelope(60, 80, 8)
+
+
+def _mast_link(envelope, **kwargs):
+    return CommunicationMode(
+        minimum_depth_feet=envelope.minimum_depth_feet,
+        maximum_depth_feet=envelope.maximum_depth_feet,
+        maximum_speed_knots=envelope.maximum_speed_knots,
+        cycle_minutes=5,
+        deployment_minutes=0,
+        retrieval_minutes=0,
+        persists_deployed=False,
+        **kwargs,
+    )
 
 
 KESTREL = EntitySpec(
@@ -363,15 +523,67 @@ KESTREL = EntitySpec(
     communications=(
         Equipment(
             "radio_mast",
-            "Retractable mast radio.",
+            "Retractable mast radio shared by separate receive and transmit cycles.",
             "stowed",
-            "five-minute receive or transmit link cycle",
+            "five-minute mast_receive or mast_transmit cycle, housed at the endpoint",
         ),
         Equipment(
             "buoyant_receive_array",
-            "Receive-only buoyant array reserved for later communications rules.",
+            "Receive-only buoyant antenna streamed below mast depth.",
             "stowed",
-            None,
+            "buoyant_receive deployment, submerged copy, and explicit retrieval",
+        ),
+    ),
+    communication_modes=(
+        _mast_link(
+            _KESTREL_MAST,
+            identifier="mast_receive",
+            antenna="radio_mast",
+            direction=LinkDirection.RECEIVE,
+            description=(
+                "Retractable mast reception. The five-minute cycle raises the "
+                "mast, copies traffic that has reached its scheduled time, and "
+                "houses the mast."
+            ),
+            latency_minutes=0,
+            emits=False,
+            reliability_offset=0.0,
+        ),
+        _mast_link(
+            _KESTREL_MAST,
+            identifier="mast_transmit",
+            antenna="radio_mast",
+            direction=LinkDirection.TRANSMIT,
+            description=(
+                "Retractable mast transmission. The five-minute cycle raises "
+                "the mast, sends the stated assessment, and houses the mast. "
+                "A completed cycle radiates."
+            ),
+            latency_minutes=0,
+            emits=True,
+            reliability_offset=0.0,
+            intercept_range_nm=15.0,
+            intercept_margin=0.20,
+        ),
+        CommunicationMode(
+            identifier="buoyant_receive",
+            antenna="buoyant_receive_array",
+            direction=LinkDirection.RECEIVE,
+            description=(
+                "Receive-only buoyant antenna. It is streamed and retrieved "
+                "as its own timed actions, stays streamed until retrieval, "
+                "and copies a bulletin only after the published delivery latency."
+            ),
+            minimum_depth_feet=120,
+            maximum_depth_feet=450,
+            maximum_speed_knots=6,
+            cycle_minutes=5,
+            deployment_minutes=10,
+            retrieval_minutes=10,
+            latency_minutes=15,
+            emits=False,
+            persists_deployed=True,
+            reliability_offset=-0.12,
         ),
     ),
     weapons=(
@@ -383,7 +595,7 @@ KESTREL = EntitySpec(
         InventoryItem("mobile_decoy", "Fictional mobile acoustic decoy.", 6),
         InventoryItem("noise_maker", "Fictional expendable noise maker.", 12),
     ),
-    mast=MastEnvelope(60, 80, 8),
+    mast=_KESTREL_MAST,
     repair_maximum_speed_knots=10,
     maneuver=ManeuverRates(
         turn_degrees_per_minute=60,

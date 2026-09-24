@@ -72,11 +72,14 @@ status. A weak or reused key could let another client recover that session.
 `act` requires one order object. Every order field must be stated: the engine
 supplies no default, so a missing `activity`, `minutes`, `course`, `speed`,
 `depth`, `operating_mode`, `interrupt_on` or `expected_turn` is rejected before
-state mutation rather than filled in from the current settings. The narrator must
-therefore read `own_ship` and restate the settings it intends to keep. Because a
-maneuver takes simulated time, `own_ship.maneuver` reports the commanded value
-beside the achieved one: restate the commanded value to continue a maneuver in
-progress, not the achieved value, which would level the boat off where it is.
+state mutation rather than filled in from the current settings. Receive,
+transmit and retrieve also require `link`, naming a published communications
+mode. The narrator must therefore read `own_ship` and restate the settings it
+intends to keep. Because a maneuver takes simulated time, `own_ship.maneuver`
+reports the commanded value beside the achieved one: restate the commanded
+value to continue a maneuver in progress, not the achieved value, which would
+level the boat off where it is. `own_ship.antennas` reports deployment and
+progress for each implemented antenna.
 Retrying exactly the same order is idempotent. Reusing its ID for different
 content, or sending a new order for a stale turn, is rejected before state
 mutation.

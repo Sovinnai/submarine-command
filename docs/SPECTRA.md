@@ -1,6 +1,6 @@
 # Narrowband spectra
 
-This is the frequency-measurement model for rules version 0.10. It uses the
+This is the frequency-measurement model for rules version 0.11. It uses the
 transmission-loss function in [Acoustic environment](ACOUSTICS.md). The values
 are fictional game parameters. The module is `submarine_command.spectra`.
 

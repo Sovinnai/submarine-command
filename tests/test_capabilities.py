@@ -38,13 +38,27 @@ class CapabilityTests(unittest.TestCase):
 
     def test_published_link_envelope_is_enforced(self):
         game = engine.initialize("45" * 32)
-        limits = KESTREL.public_capabilities()["communications"]["mast_envelope"]
-        raw = {"id": "rx", "expected_turn": 0, "activity": "receive", "minutes": 5,
-               "interrupt_on": [], "course": 90, "operating_mode": "standard",
+        communications = KESTREL.public_capabilities()["communications"]
+        limits = communications["mast_envelope"]
+        raw = {"id": "rx", "expected_turn": 0, "activity": "receive",
+               "link": "mast_receive", "minutes": 5, "interrupt_on": [],
+               "course": 90, "operating_mode": "standard",
                "depth": limits["maximum_depth_feet"], "speed": limits["maximum_speed_knots"]}
         engine.validate_order(raw, game["state"])
         with self.assertRaises(ValueError):
             engine.validate_order({**raw, "depth": limits["maximum_depth_feet"] + 1}, game["state"])
+        buoyant = next(mode for mode in communications["modes"] if mode["id"] == "buoyant_receive")
+        deep = {"id": "buoy", "expected_turn": 0, "activity": "receive",
+                "link": "buoyant_receive", "minutes": 5, "interrupt_on": [],
+                "course": 90, "operating_mode": "standard",
+                "depth": buoyant["envelope"]["maximum_depth_feet"],
+                "speed": buoyant["envelope"]["maximum_speed_knots"]}
+        engine.validate_order(deep, game["state"])
+        with self.assertRaises(ValueError):
+            engine.validate_order(
+                {**deep, "depth": buoyant["envelope"]["minimum_depth_feet"] - 1},
+                game["state"],
+            )
 
     def test_capabilities_command_needs_no_game_and_creates_no_save(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -67,6 +81,23 @@ class CapabilityTests(unittest.TestCase):
             ["supported", "uncertain", "outside_scope"],
         )
         self.assertFalse(public["weapons"]["employment_modeled"])
+        communications = public["communications"]
+        self.assertEqual(communications["receive_modes"], ["mast_receive", "buoyant_receive"])
+        self.assertEqual(communications["transmit_modes"], ["mast_transmit"])
+        self.assertTrue(communications["buoyant_array_modeled"])
+        self.assertTrue(communications["submerged_reception_modeled"])
+        catalog = KESTREL.public_definition()
+        self.assertEqual(
+            [mode["id"] for mode in catalog["communication_modes"]],
+            [mode["id"] for mode in communications["modes"]],
+        )
+        for mode in communications["modes"]:
+            antenna = next(
+                item for item in communications["inventory"] if item["id"] == mode["antenna"]
+            )
+            self.assertTrue(antenna["implemented"])
+        towed = next(item for item in public["sensors"] if item["id"] == "towed_array")
+        self.assertFalse(towed["implemented"])
         self.assertTrue(public["measurements"]["numeric_narrowband_frequencies"])
         self.assertTrue(public["sonar"]["spectral_frequencies_modeled"])
         model = engine.capability_report()["narrowband_model"]
