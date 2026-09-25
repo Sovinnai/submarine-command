@@ -28,6 +28,11 @@ CORRELATION_WINDOW_MINUTES = 20
 BIAS_FRACTION_BOUND = 0.0015
 ARRAY_BIAS_FRACTION_BOUND = 0.0008
 
+
+def combined_bias_fraction_bound():
+    """Root-sum-square of the environmental and per-receiver fractional bounds."""
+    return math.hypot(BIAS_FRACTION_BOUND, ARRAY_BIAS_FRACTION_BOUND)
+
 # Unresolved radial rate used only to widen the reported uncertainty.
 MOTION_UNCERTAINTY_KNOTS = 0.4
 KNOTS_TO_METERS_PER_SECOND = 1852.0 / 3600.0
@@ -550,9 +555,7 @@ def cramer_rao_hz(snr_db, integration_seconds):
 
 def frequency_uncertainty_hz(frequency_hz, snr_db, integration_seconds, sound_speed_m_s):
     sigma_cr = cramer_rao_hz(snr_db, integration_seconds)
-    sigma_bias = frequency_hz * math.hypot(
-        BIAS_FRACTION_BOUND, ARRAY_BIAS_FRACTION_BOUND
-    ) / math.sqrt(3.0)
+    sigma_bias = frequency_hz * combined_bias_fraction_bound() / math.sqrt(3.0)
     sigma_motion = (
         frequency_hz
         * (MOTION_UNCERTAINTY_KNOTS * KNOTS_TO_METERS_PER_SECOND)

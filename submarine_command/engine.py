@@ -85,7 +85,7 @@ COMMAND_CONTRACT = {
         "mast": "Mast deployment, visual observation, and recovery form a five-minute cycle concurrent with movement. The cycle requires the whole five minutes inside the published mast depth and speed envelope; a step spent transiting toward mast depth defers it and reports the achieved and commanded settings. Results are available at the step endpoint.",
         "communications": "Receive and transmit are separate published modes, and the order names one with link. Each attempt occupies one five-minute step, concurrent with movement and passive observation, and counts only when the whole step is inside that mode's depth and speed envelope. A step spent reaching the envelope is deferred and reported. Mast modes raise, attempt, and house the mast inside the cycle. Buoyant receive is receive-only: deployment and retrieval take their published times, the antenna stays streamed and limits later orders until retrieval completes, and a bulletin can be copied only after its scheduled time plus that mode's latency. A usable receive link or an acknowledged transmission completes the task. A failed link may be retried unless radio_failure is an interrupt. Channel quality is one draw per 20-minute window, shared by every mode and shifted by the mode's published reliability offset, so repeated attempts in that window agree. A completed mast transmission radiates. Surface-combatant intercept uses that same draw and the published range. The transmission does not change own-ship acoustic source level.",
         "repair": "Repair needs 20 productive minutes at no more than the published repair speed. Only the minutes actually spent at or below that speed count, so a step spent decelerating earns partial credit. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
-        "towed_array": "stream_array needs 15 productive minutes at 8 knots or less; recover_array needs 10. Only minutes actually spent at or below that speed count, including a step spent decelerating, and progress is kept across interrupted windows. Hull and flank still listen during those activities. Recovery marks the towed receiver recovering before that step's listening, so the towed array does not keep bearings while it is being recovered. While the array is streaming, streamed or recovering, ordered speed may not exceed the published limit for that state. A turn, or the five minutes after one, marks the towed receiver unstable; the engine does not calculate cable shape or layback.",
+        "towed_array": "stream_array needs 15 productive minutes at 8 knots or less; recover_array needs 10. Only minutes actually spent at or below that speed count, including a step spent decelerating, and progress is kept across interrupted windows. Hull and flank still listen during those activities. Recovery marks the towed receiver recovering before that step's listening, so the towed array does not keep bearings while it is being recovered. While the array is streaming, streamed or recovering, ordered speed may not exceed the published limit for that state. A turn, or the five minutes after one, marks the towed receiver unstable, including a turn on the step that finishes streaming; the engine does not calculate cable shape or layback.",
         "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. Own-ship narrowband lines follow the published operating-state spectrum rules, but opposing detection does not use that spectrum. Selecting a quieter plant state carries no direct counter-detection benefit beyond the speed it permits. Opposing detection uses own-ship speed, the shared transmission-loss model, receiver depth and active transmission.",
     },
     "order_fields": {
@@ -1107,20 +1107,25 @@ def _set_towed(state, deployment, progress=None, unstable_until=None):
     state["own"]["equipment"][arrays.TOWED_ID] = deployment
 
 
-def _update_towed_stability(state, course_before):
-    record = state.get("towed")
-    if record is None or record["deployment"] != arrays.STREAMED:
-        return
-    turning = (
+def _towed_is_turning(state, course_before):
+    return (
         abs((state["own"]["course"] - course_before + 180) % 360 - 180) > 0.05
         or maneuver_view(state)["course"]["in_progress"]
     )
+
+
+def _update_towed_stability(state, course_before):
+    record = state.get("towed")
+    if record is None or record["deployment"] not in (arrays.STREAMED, arrays.STREAMING):
+        return
+    turning = _towed_is_turning(state, course_before)
+    listening = record["deployment"] == arrays.STREAMED
     if turning:
         until = state["t"] + arrays.TURN_SETTLE_MINUTES
         if record["unstable_until"] < until:
             was_stable = not arrays.is_unstable(record, state["t"])
             record["unstable_until"] = until
-            if was_stable:
+            if listening and was_stable:
                 report(
                     state,
                     "Sonar",
@@ -1130,12 +1135,13 @@ def _update_towed_stability(state, course_before):
                 )
         return
     if record["unstable_until"] and not arrays.is_unstable(record, state["t"]):
-        report(
-            state,
-            "Sonar",
-            "Towed array has settled after the turn.",
-            "array_stable",
-        )
+        if listening:
+            report(
+                state,
+                "Sonar",
+                "Towed array has settled after the turn.",
+                "array_stable",
+            )
         record["unstable_until"] = 0
 
 
@@ -1176,7 +1182,7 @@ def apply_towed_array(state, order, achieved):
             return
         progress = record["progress_minutes"] + inside
         if progress >= spec.deployment_minutes:
-            _set_towed(state, arrays.STREAMED, 0, unstable_until=0)
+            _set_towed(state, arrays.STREAMED, 0)
             report(
                 state,
                 "Sonar",
@@ -1184,6 +1190,14 @@ def apply_towed_array(state, order, achieved):
                 "published offset; cable shape is not calculated.",
                 "array_streamed",
             )
+            if arrays.is_unstable(record, state["t"]):
+                report(
+                    state,
+                    "Sonar",
+                    "Towed array is unstable during the turn. That receiver "
+                    "keeps no bearings until it settles; cable shape is not calculated.",
+                    "array_unstable",
+                )
             return
         _set_towed(state, arrays.STREAMING, progress)
         report(

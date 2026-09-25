@@ -172,11 +172,12 @@ A separate frequency indication compares successive measured lines. It removes
 the own-ship closing-speed change recorded as course and speed at each look.
 The operator calls a change at 2 sigma and the supervisor at 3 sigma, so one
 role can hear it before the other, and a later look can cross the higher
-gate. Inside one 20-minute evidence window the shared frequency bias and the
-reused per-line processing error cancel, which is why that window stays longer
-than the five-minute step: a new draw every step would hide a small shift. A
-residual inside the gate is not called. A residual larger than the published
-Doppler bound is read as an emitted-frequency change. Received level does not depend on bow, beam, or stern aspect.
+gate. Inside one 20-minute evidence window the shared environmental and
+receiver calibration bias and the reused per-line processing error cancel,
+which is why that window stays longer than the five-minute step: a new draw
+every step would hide a small shift. A residual inside the gate is not called.
+A residual larger than the published Doppler bound is read as an
+emitted-frequency change. Received level does not depend on bow, beam, or stern aspect.
 
 ## What makes a good session
 

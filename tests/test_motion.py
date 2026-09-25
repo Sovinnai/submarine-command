@@ -688,6 +688,25 @@ class FrequencyChangeTests(unittest.TestCase):
             crossed["comparisons"][0]["matched_lines"][0]["sigma_hz"],
         )
 
+    def test_same_window_decomposition_uses_combined_receiver_bias(self):
+        def rss(frequency, processing_hz):
+            bias = frequency * spectra.combined_bias_fraction_bound() / math.sqrt(3.0)
+            motion = (
+                frequency
+                * (spectra.MOTION_UNCERTAINTY_KNOTS * spectra.KNOTS_TO_METERS_PER_SECOND)
+                / SOUND_SPEED_MPS
+            )
+            return math.hypot(processing_hz, bias, motion)
+
+        result = frequency_change_assessment([
+            _look(0, "R1", [_tone(60.0, uncertainty=rss(60.0, 0.01))]),
+            _look(5, "R2", [_tone(60.16, uncertainty=rss(60.16, 0.10))]),
+        ], 5)
+        line = result["comparisons"][0]["matched_lines"][0]
+        self.assertLess(line["sigma_ratio"], 2)
+        self.assertEqual(result["status"], "not_indicated")
+        self.assertEqual(line["cue"], "within_error")
+
     def test_hidden_fields_and_looks_without_lines_do_not_change_the_call(self):
         clean = [
             _look(0, "R1", [_tone(60.0)]),

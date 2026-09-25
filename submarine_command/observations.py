@@ -138,8 +138,9 @@ def frequency_change_model():
             "frequency change is reduced by the own-ship closing-speed change "
             f"recorded as course and speed at each look, at {SOUND_SPEED_MPS:g} m/s. "
             "A pair with no recorded speed is not corrected. Inside one evidence "
-            "window the shared frequency bias and the reused per-line processing "
-            "sample cancel. Across a window boundary the full reported uncertainties "
+            "window the shared environmental and receiver calibration bias and the "
+            "reused per-line processing sample cancel. Across a window boundary the "
+            "full reported uncertainties "
             "apply, so a small shift can stay inside the gate until a later look."
         ),
         "cue": (
@@ -1099,7 +1100,7 @@ def _closing_knots(velocity, bearing):
 
 
 def _bias_sigma_hz(frequency):
-    return frequency * spectra.BIAS_FRACTION_BOUND / math.sqrt(3.0)
+    return frequency * spectra.combined_bias_fraction_bound() / math.sqrt(3.0)
 
 
 def _motion_sigma_hz(frequency):
@@ -1121,8 +1122,9 @@ def _difference_sigma_hz(left, right, same_window):
     """Sigma of a frequency difference.
 
     Inside one evidence window the per-line processing sample is reused, so it
-    cancels except for a change in its width, and the shared bias cancels except
-    for the difference in line frequency. Across a window both are independent.
+    cancels except for a change in its width, and the shared environmental and
+    receiver calibration biases cancel except for the difference in line frequency.
+    Across a window both are independent.
     """
     processing_left, bias_left, motion_left = _component_sigmas(
         left["uncertainty_hz"], left["measured_hz"]
