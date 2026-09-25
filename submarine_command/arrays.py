@@ -445,7 +445,7 @@ def public_sonar_capabilities(platform_id):
             "flow_scale), plus pump_coupling * pump_fault_db when the pump is "
             "degraded, plus unstable_extra_db while the towed receiver is unstable."
         ),
-        "bearing_bias": {
+        "bearing_bias_model": {
             "combined_degrees": 2,
             "environment_degrees": ENVIRONMENT_BEARING_BIAS_DEGREES,
             "rule": (
