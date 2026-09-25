@@ -489,6 +489,10 @@ class PublicContactTests(unittest.TestCase):
         self.assertEqual(published["correlation_window_minutes"], spectra.CORRELATION_WINDOW_MINUTES)
         self.assertEqual(spectra.CORRELATION_WINDOW_MINUTES, 20)
         self.assertIn("frequency_change", view["platform_capabilities"]["measurements"])
+        self.assertEqual(published["same_line_association_fraction"], 0.10)
+        self.assertIn("stayed put", published["comparison"])
+        self.assertIn("frequency order", published["comparison"])
+        self.assertIn("Unequal lists", published["comparison"])
 
 
 def _tone(frequency, quality="moderate", uncertainty=0.05):
@@ -622,6 +626,38 @@ class FrequencyChangeTests(unittest.TestCase):
         ], 5)
         self.assertEqual(single["crew"]["operator"]["cue"], "emitted_frequency")
         self.assertEqual(single["crew"]["operator"]["confidence"], "moderate")
+
+    def test_a_new_line_beside_a_stable_family_is_unmatched(self):
+        result = frequency_change_assessment([
+            _look(0, "R1", [_tone(61.2), _tone(122.4), _tone(183.6)]),
+            _look(5, "R2", [_tone(47.5), _tone(122.1), _tone(183.2)]),
+        ], 5)
+        comparison = result["comparisons"][0]
+        pairs = [
+            (line["from_hz"], line["to_hz"])
+            for line in comparison["matched_lines"]
+        ]
+        self.assertEqual(sorted(pairs), [(122.4, 122.1), (183.6, 183.2)])
+        self.assertEqual(comparison["unmatched_earlier"], 1)
+        self.assertEqual(comparison["unmatched_later"], 1)
+        self.assertTrue(
+            all(line["cue"] != "emitted_frequency" for line in comparison["matched_lines"])
+        )
+        self.assertNotEqual(result["crew"]["operator"].get("cue"), "emitted_frequency")
+        self.assertNotEqual(result["crew"]["supervisor"].get("cue"), "emitted_frequency")
+
+    def test_unequal_spectra_without_a_same_line_stay_unmatched(self):
+        result = frequency_change_assessment([
+            _look(0, "R1", [_tone(61.2), _tone(122.4), _tone(183.6)]),
+            _look(5, "R2", [_tone(47.5), _tone(140.0)]),
+        ], 5)
+        comparison = result["comparisons"][0]
+        self.assertEqual(comparison["matched_lines"], [])
+        self.assertEqual(comparison["unmatched_earlier"], 3)
+        self.assertEqual(comparison["unmatched_later"], 2)
+        self.assertEqual(result["status"], "not_indicated")
+        self.assertNotEqual(result["crew"]["operator"].get("cue"), "emitted_frequency")
+        self.assertNotEqual(result["crew"]["supervisor"].get("cue"), "emitted_frequency")
 
     def test_own_ship_doppler_is_removed_before_the_call(self):
         closing = 10.0 * spectra.KNOTS_TO_METERS_PER_SECOND

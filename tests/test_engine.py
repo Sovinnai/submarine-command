@@ -99,17 +99,85 @@ class EngineTests(unittest.TestCase):
         with mock.patch.object(acoustics, "detection_probability", return_value=0.99):
             for minute in (5, 10, 15):
                 state["t"] = minute
-                before = len(state["tracks"][0]["observations"])
+                track = next(
+                    (tr for tr in state["tracks"] if tr["actor"] == primary["id"]),
+                    None,
+                )
+                before = 0 if track is None else len(track["observations"])
                 e.observe_contact(state, primary, dice)
-                self.assertEqual(len(state["tracks"][0]["observations"]), before + 1)
+                track = next(tr for tr in state["tracks"] if tr["actor"] == primary["id"])
+                self.assertEqual(len(track["observations"]), before + 1)
                 e.observe_contact(state, primary, dice)
-                self.assertEqual(len(state["tracks"][0]["observations"]), before + 1)
-        track = state["tracks"][0]
+                self.assertEqual(len(track["observations"]), before + 1)
+        track = next(tr for tr in state["tracks"] if tr["actor"] == primary["id"])
         self.assertLessEqual(len(track["evidence"]), 1)
         stored = track["observations"][-1]["spectrum"]
         self.assertEqual(stored, track["observations"][-1]["spectrum"])
         self.assertTrue(all(0 <= ob["bearing_true"] < 360 for ob in track["observations"]))
         self.assertTrue(all("emitted_hz" not in line for ob in track["observations"] for line in ob["spectrum"]["lines"]))
+
+    def test_opening_does_not_invent_an_undetected_contact(self):
+        quiet = {
+            "public": {
+                "lines": [],
+                "broadband": [],
+                "harmonic_relations": [],
+                "evidence_note": "Measured frequencies are evidence. They do not identify the source.",
+            },
+            "feature": None,
+            "any_detected": False,
+            "best_excess_db": None,
+            "strength": "weak",
+            "description": "No discrete frequency line resolved.",
+            "detail": {"lines": [], "broadband": [], "emitted_line_ids": []},
+        }
+        with mock.patch.object(spectra, "measure_contact", return_value=quiet):
+            state = e.new_world("ab" * 32)
+        self.assertEqual(state["tracks"], [])
+        self.assertFalse(any(entry["category"] == "new_contact" for entry in state["reports"]))
+
+    def test_opening_listen_scans_every_actor(self):
+        loud = {
+            "public": {
+                "lines": [],
+                "broadband": [{"low_hz": 10.0, "high_hz": 200.0, "quality": "moderate"}],
+                "harmonic_relations": [],
+                "evidence_note": "Measured frequencies are evidence. They do not identify the source.",
+            },
+            "feature": "broadband",
+            "any_detected": True,
+            "best_excess_db": 6.0,
+            "strength": "moderate",
+            "description": "Broadband energy in 10-200 Hz (moderate).",
+            "detail": {"lines": [], "broadband": [], "emitted_line_ids": []},
+        }
+        with mock.patch.object(spectra, "measure_contact", return_value=loud):
+            state = e.new_world("ab" * 32)
+        self.assertEqual(len(state["tracks"]), len(state["actors"]))
+        self.assertEqual(
+            {track["actor"] for track in state["tracks"]},
+            {actor["id"] for actor in state["actors"]},
+        )
+
+    def test_completed_mast_cycle_reports_a_negative(self):
+        state = self.game["state"]
+        for actor in state["actors"]:
+            actor["x"] = 40.0
+            actor["y"] = 40.0
+        state["own"]["depth"] = 70.0
+        state["ordered"]["depth"] = 70.0
+        result = e.apply_order(
+            self.game,
+            self.order(id="mast", activity="mast", depth=70, speed=5, minutes=5),
+        )
+        scope = [
+            entry for entry in result["reports_this_turn"]
+            if entry["department"] == "Scope"
+        ]
+        self.assertEqual(len(scope), 1)
+        self.assertEqual(scope[0]["category"], "routine")
+        self.assertIn("No visual contact", scope[0]["text"])
+        self.assertFalse(any(entry.get("visual") for entry in result["reports_this_turn"]))
 
     def test_active_reception_strength_includes_the_echo(self):
         state = self.game["state"]
@@ -137,7 +205,8 @@ class EngineTests(unittest.TestCase):
             mock.patch.object(acoustics, "detection_probability", return_value=1.0),
         ):
             e.observe_contact(state, actor, dice, mode="active")
-        observation = state["tracks"][0]["observations"][-1]
+        track = next(tr for tr in state["tracks"] if tr["actor"] == actor["id"])
+        observation = track["observations"][-1]
         self.assertEqual(observation["source"], "active")
         self.assertEqual(observation["strength"], "strong")
         self.assertIsNotNone(observation["range_estimate_nm"])
@@ -383,9 +452,9 @@ class EngineTests(unittest.TestCase):
     # --- interrupted maneuvers ---
 
     def test_interrupt_reports_achieved_and_ordered_and_keeps_the_maneuver(self):
+        self.game["state"]["equipment_susceptibility"] = 1000
         result = e.apply_order(self.game, self.order(
-            id="deep", depth=900, minutes=60,
-            interrupt_on=["new_contact", "contact_lost", "classification_change"]))
+            id="deep", depth=900, minutes=60, interrupt_on=["equipment"]))
         execution = result["last_execution"]
         self.assertEqual(execution["stop_reason"], "interrupt")
         maneuver = execution["maneuver"]
@@ -632,11 +701,20 @@ class EngineTests(unittest.TestCase):
 
         listening = copy.deepcopy(self.game["state"])
         primary = listening["actors"][0]
-        before = len(listening["tracks"][0]["observations"])
+        existing = next(
+            (tr for tr in listening["tracks"] if tr["actor"] == primary["id"]),
+            None,
+        )
+        before = 0 if existing is None else len(existing["observations"])
         with mock.patch.object(acoustics, "signal_excess_db", return_value=-80.0):
             with mock.patch.object(e, "acoustic_window_db", return_value=0.0):
                 e.observe_contact(listening, primary, FloorDraw())
-        self.assertEqual(len(listening["tracks"][0]["observations"]), before)
+        track = next(
+            (tr for tr in listening["tracks"] if tr["actor"] == primary["id"]),
+            None,
+        )
+        after = 0 if track is None else len(track["observations"])
+        self.assertEqual(after, before)
 
     def test_every_world_actor_uses_registered_components_and_valid_geometry(self):
         state = self.game["state"]

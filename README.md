@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.11.** The hidden-state and replay foundation
+**Status: early prototype, version 0.12.** The hidden-state and replay foundation
 works. Acoustic transmission uses a documented sound-speed profile and path
 approximations. Contact reports include measured narrowband frequencies, line
 quality and uncertainty. Array geometry is still simplified.
@@ -125,7 +125,8 @@ step endpoint. Active means one pulse during the first step, followed by passive
 listening.
 
 Mast observation is a five-minute deployment, operation, and recovery cycle
-concurrent with movement and passive observation. Receive and transmit are
+concurrent with movement and passive observation. A completed cycle reports
+each visual contact or an explicit negative when none was seen. Receive and transmit are
 separate modes. A mast link is also a five-minute cycle: the mast is raised,
 the link is attempted, and the mast is housed before the step ends. A usable
 receive link—whether or not a message is waiting—or an acknowledged
