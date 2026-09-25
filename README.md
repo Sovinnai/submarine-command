@@ -161,8 +161,8 @@ step spent decelerating. Hull and flank still listen during those activities;
 recovery marks the towed receiver recovering before that step's listening. While
 the towed array is streaming, streamed, or recovering, later orders may not
 exceed the published speed for that state. A turn, or the five minutes after
-one, marks the towed receiver unstable through the settling step instead of
-calculating cable shape. Each listening receiver writes its own contact history;
+one, marks the towed receiver unstable through the settling step, including a
+turn on the step that finishes streaming, instead of calculating cable shape. Each listening receiver writes its own contact history;
 a similar bearing on another receiver is not automatically the same contact. A
 visual sighting is a separate history. Focused analysis requires an acoustic
 receiver history. `own_ship.sonar_receivers` and
