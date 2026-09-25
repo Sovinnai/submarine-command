@@ -142,7 +142,8 @@ def frequency_change_model():
             "stayed put, leftover tones are unmatched rather than a frequency "
             f"jump. Only when no line stayed put are equal-count lists paired in "
             f"frequency order within {LINE_ASSOCIATION_FRACTION:.0%} as a "
-            "family-wide emitted change, such as blade rate. The frequency "
+            "family-wide emitted change, such as blade rate. Unequal lists, or "
+            "equal-count lists that fail that order, stay unmatched. The frequency "
             "change is reduced by the "
             "own-ship closing-speed change recorded as course and speed at each "
             f"look, at {SOUND_SPEED_MPS:g} m/s. A pair with no recorded speed is "
@@ -1195,8 +1196,9 @@ def _match_lines(earlier, later):
     A leftover tone beside a stable line is a detection appearing or dropping,
     not an emitted-frequency change of the stable family. A blade-rate jump
     moves every resolved line, so the wide gate applies only when nothing
-    stayed within the same-line fraction, and those jumps are paired in
-    frequency order rather than by nearest hertz.
+    stayed within the same-line fraction, both looks have the same count, and
+    those jumps are paired in frequency order rather than by nearest hertz.
+    Unequal lists, or equal-count lists that fail that order, stay unmatched.
     """
     earlier = sorted(earlier, key=lambda line: line["measured_hz"])
     later = sorted(later, key=lambda line: line["measured_hz"])
@@ -1208,7 +1210,7 @@ def _match_lines(earlier, later):
     ordered = _frequency_order_pairs(earlier, later, LINE_ASSOCIATION_FRACTION)
     if ordered is not None:
         return ordered
-    return _greedy_line_pairs(earlier, later, LINE_ASSOCIATION_FRACTION)
+    return [], len(earlier), len(later)
 
 
 def _frequency_cue(sigma_ratio, fractional):

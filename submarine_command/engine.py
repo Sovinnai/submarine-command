@@ -40,7 +40,7 @@ from .platforms import (
     public_entity_catalog,
 )
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 TICK = 5
 MANEUVER_STEP = 1
 END = 290

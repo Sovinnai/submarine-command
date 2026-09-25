@@ -1,6 +1,6 @@
 # Acoustic environment
 
-This is the implemented transmission model for rules version 0.11. It is
+This is the implemented transmission model for rules version 0.12. It is
 idealized physics for a turn-based game. It does not reproduce classified
 sonar performance or a research-grade ocean-acoustics solver.
 

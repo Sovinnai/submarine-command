@@ -492,6 +492,7 @@ class PublicContactTests(unittest.TestCase):
         self.assertEqual(published["same_line_association_fraction"], 0.10)
         self.assertIn("stayed put", published["comparison"])
         self.assertIn("frequency order", published["comparison"])
+        self.assertIn("Unequal lists", published["comparison"])
 
 
 def _tone(frequency, quality="moderate", uncertainty=0.05):
@@ -642,6 +643,19 @@ class FrequencyChangeTests(unittest.TestCase):
         self.assertTrue(
             all(line["cue"] != "emitted_frequency" for line in comparison["matched_lines"])
         )
+        self.assertNotEqual(result["crew"]["operator"].get("cue"), "emitted_frequency")
+        self.assertNotEqual(result["crew"]["supervisor"].get("cue"), "emitted_frequency")
+
+    def test_unequal_spectra_without_a_same_line_stay_unmatched(self):
+        result = frequency_change_assessment([
+            _look(0, "R1", [_tone(61.2), _tone(122.4), _tone(183.6)]),
+            _look(5, "R2", [_tone(47.5), _tone(140.0)]),
+        ], 5)
+        comparison = result["comparisons"][0]
+        self.assertEqual(comparison["matched_lines"], [])
+        self.assertEqual(comparison["unmatched_earlier"], 3)
+        self.assertEqual(comparison["unmatched_later"], 2)
+        self.assertEqual(result["status"], "not_indicated")
         self.assertNotEqual(result["crew"]["operator"].get("cue"), "emitted_frequency")
         self.assertNotEqual(result["crew"]["supervisor"].get("cue"), "emitted_frequency")
 
