@@ -156,12 +156,16 @@ minutes actually spent at or below that speed, persists across command windows,
 and is concurrent with movement and observation.
 
 `stream_array` needs 15 productive minutes at 8 knots or less; `recover_array`
-needs 10. Hull and flank still listen during those activities. While the towed
-array is streaming, streamed, or recovering, later orders may not exceed the
-published speed for that state. A turn, or the five minutes after one, marks
-the towed receiver unstable instead of calculating cable shape. Each listening
-receiver writes its own contact history; a similar bearing on another receiver
-is not automatically the same contact. `own_ship.sonar_receivers` and
+needs 10. Only minutes actually spent at or below that speed count, including a
+step spent decelerating. Hull and flank still listen during those activities;
+recovery marks the towed receiver recovering before that step's listening. While
+the towed array is streaming, streamed, or recovering, later orders may not
+exceed the published speed for that state. A turn, or the five minutes after
+one, marks the towed receiver unstable through the settling step instead of
+calculating cable shape. Each listening receiver writes its own contact history;
+a similar bearing on another receiver is not automatically the same contact. A
+visual sighting is a separate history. Focused analysis requires an acoustic
+receiver history. `own_ship.sonar_receivers` and
 `own_ship.towed_array` show the published depths, coverage and deployment.
 The public `command_contract` reports these rules in machine-readable form.
 

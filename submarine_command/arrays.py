@@ -34,6 +34,11 @@ SURFACE_CLEARANCE_FEET = 40.0
 BOTTOM_CLEARANCE_FEET = 40.0
 TURN_SETTLE_MINUTES = 5
 PUMP_FAULT_DB = 3.5
+FREQUENCY_FLOOR_HZ = 20.0
+FLOW_NOISE_COEFFICIENT = 0.055
+FLOW_NOISE_FACTOR_FLOOR = 0.24
+UNSTABLE_SELF_NOISE_DB = 6.0
+ENVIRONMENT_BEARING_BIAS_DEGREES = 1.0
 
 
 def _in_arc(relative_deg, start_deg, end_deg):
@@ -69,6 +74,11 @@ class ArraySpec:
     pump_coupling: float = 1.0
     flow_scale: float = 1.0
     quiet_speed_knots: float = 5.0
+    frequency_gain_slope: float = 8.0
+    frequency_gain_high_slope: float | None = None
+    frequency_gain_pivot_hz: float | None = None
+    frequency_gain_min_db: float = -12.0
+    frequency_gain_max_db: float = 4.0
     self_noise_family: str = OWN_SHIP_MOUNTED_NOISE
     geometry_note: str = ""
 
@@ -93,6 +103,23 @@ class ArraySpec:
             "deploy_speed_knots": self.deploy_speed_knots,
             "stable_speed_knots": self.stable_speed_knots,
             "pump_coupling": self.pump_coupling,
+            "flow_scale": self.flow_scale,
+            "quiet_speed_knots": self.quiet_speed_knots,
+            "frequency_response": {
+                "floor_hz": FREQUENCY_FLOOR_HZ,
+                "slope_db_per_decade": self.frequency_gain_slope,
+                "high_slope_db_per_decade": self.frequency_gain_high_slope,
+                "pivot_hz": self.frequency_gain_pivot_hz,
+                "min_gain_db": self.frequency_gain_min_db,
+                "max_gain_db": self.frequency_gain_max_db,
+            },
+            "self_noise": {
+                "family": self.self_noise_family,
+                "flow_coefficient": FLOW_NOISE_COEFFICIENT,
+                "factor_floor": FLOW_NOISE_FACTOR_FLOOR,
+                "pump_fault_db": PUMP_FAULT_DB,
+                "unstable_extra_db": UNSTABLE_SELF_NOISE_DB,
+            },
             "self_noise_family": self.self_noise_family,
             "geometry_note": self.geometry_note,
         }
@@ -126,6 +153,9 @@ FLANK = ArraySpec(
     design_frequency_hz=250.0,
     pump_coupling=0.5,
     flow_scale=0.65,
+    frequency_gain_slope=6.0,
+    frequency_gain_min_db=-8.0,
+    frequency_gain_max_db=3.0,
     self_noise_family=OWN_SHIP_MOUNTED_NOISE,
     geometry_note=(
         "Port and starboard flanks are one receiver with two beam sectors. "
@@ -154,6 +184,11 @@ TOWED = ArraySpec(
     pump_coupling=0.12,
     flow_scale=1.4,
     quiet_speed_knots=8.0,
+    frequency_gain_slope=3.0,
+    frequency_gain_high_slope=-10.0,
+    frequency_gain_pivot_hz=400.0,
+    frequency_gain_min_db=-16.0,
+    frequency_gain_max_db=4.0,
     self_noise_family=TOWED_NOISE,
     geometry_note=(
         "Receiver depth is keel depth plus 120 feet, clipped 40 feet below the "
@@ -232,30 +267,28 @@ def receiver_depth_feet(spec, keel_feet, water_depth_feet):
 
 def frequency_gain_db(spec, frequency_hz):
     """Fictional receiver response relative to the design band, clipped."""
-    frequency = max(frequency_hz, 20.0)
-    if spec.kind == "towed":
-        pivot = 400.0
-        if frequency <= pivot:
-            gain = 3.0 * math.log10(frequency / spec.design_frequency_hz)
-        else:
-            gain = (
-                3.0 * math.log10(pivot / spec.design_frequency_hz)
-                - 10.0 * math.log10(frequency / pivot)
-            )
-        return max(-16.0, min(4.0, gain))
-    gain = (8.0 if spec.kind == "hull" else 6.0) * math.log10(
-        frequency / spec.design_frequency_hz
-    )
-    low, high = (-12.0, 4.0) if spec.kind == "hull" else (-8.0, 3.0)
-    return max(low, min(high, gain))
+    frequency = max(frequency_hz, FREQUENCY_FLOOR_HZ)
+    design = spec.design_frequency_hz
+    pivot = spec.frequency_gain_pivot_hz
+    if pivot is not None and frequency > pivot:
+        gain = (
+            spec.frequency_gain_slope * math.log10(pivot / design)
+            + spec.frequency_gain_high_slope * math.log10(frequency / pivot)
+        )
+    else:
+        gain = spec.frequency_gain_slope * math.log10(frequency / design)
+    return max(spec.frequency_gain_min_db, min(spec.frequency_gain_max_db, gain))
 
 
 def self_noise_adjustment_db(spec, speed_knots, pump_fault=False, unstable=False):
-    slope = 0.055 * spec.flow_scale
-    factor = max(0.24, 1.0 - max(0.0, speed_knots - spec.quiet_speed_knots) * slope)
+    slope = FLOW_NOISE_COEFFICIENT * spec.flow_scale
+    factor = max(
+        FLOW_NOISE_FACTOR_FLOOR,
+        1.0 - max(0.0, speed_knots - spec.quiet_speed_knots) * slope,
+    )
     extra = spec.pump_coupling * PUMP_FAULT_DB if pump_fault else 0.0
     if unstable:
-        extra += 6.0
+        extra += UNSTABLE_SELF_NOISE_DB
     return -10.0 * math.log10(factor) + extra
 
 
@@ -284,6 +317,12 @@ def listening_specs(entity):
     return tuple(spec for spec in suite if is_listening(spec, entity))
 
 
+def is_unstable(record, elapsed_minutes):
+    """True through the turn and the complete five-minute step that settles it."""
+    until = 0 if record is None else record.get("unstable_until") or 0
+    return bool(until) and elapsed_minutes <= until
+
+
 def snapshot(
     spec,
     entity,
@@ -297,6 +336,8 @@ def snapshot(
     if true_bearing_deg is not None:
         relative = relative_bearing_deg(entity["course"], true_bearing_deg)
         coverage = coverage_status(spec, relative, unstable=unstable and spec.deployable)
+    elif spec.deployable and unstable:
+        coverage = UNSTABLE
     depth = receiver_depth_feet(spec, entity["depth"], water_depth_feet)
     state = equipment_state(entity, spec.identifier)
     if spec.deployable and state != STREAMED:
@@ -382,14 +423,38 @@ def public_sonar_capabilities(platform_id):
                 "Streaming and recovery credit only minutes actually spent at or "
                 "below the deploy speed, retain progress across interrupted "
                 "windows, and occupy the selected activity while hull and flank "
-                "still listen."
+                "still listen. Recovery marks the towed receiver recovering before "
+                "that step's listening, so it does not keep bearings while it is "
+                "being recovered."
             ),
         },
         "contact_correlation_across_receivers": (
             "A track is one receiver's history. Hull, flank and towed detections "
-            "are not automatically the same contact. Shared error sources are "
-            "listed on each observation."
+            "are not automatically the same contact. A visual sighting is its own "
+            "history. Shared error sources are listed on each observation. Focused "
+            "analysis requires an acoustic receiver history."
         ),
+        "frequency_response_rule": (
+            "Gain is slope_db_per_decade times log10(frequency / design_frequency_hz). "
+            "Above pivot_hz the published high slope applies. The result is clipped "
+            "to min_gain_db and max_gain_db. Frequencies below floor_hz use the floor."
+        ),
+        "self_noise_rule": (
+            "Self-noise rises with speed above quiet_speed_knots as -10 log10 of "
+            "max(factor_floor, 1 - (speed - quiet_speed_knots) * flow_coefficient * "
+            "flow_scale), plus pump_coupling * pump_fault_db when the pump is "
+            "degraded, plus unstable_extra_db while the towed receiver is unstable."
+        ),
+        "bearing_bias": {
+            "combined_degrees": 2,
+            "environment_degrees": ENVIRONMENT_BEARING_BIAS_DEGREES,
+            "rule": (
+                "Each reported acoustic bearing adds one environment bias of at most "
+                f"{ENVIRONMENT_BEARING_BIAS_DEGREES:g} degree and one receiver bias "
+                "drawn so the sum stays within 2 degrees. The motion estimator "
+                "searches that combined 2-degree bias."
+            ),
+        },
         "active_receiver": HULL_ID,
         "relative_bearing": (
             "Coverage uses relative bearing, 000 at the bow, increasing clockwise. "

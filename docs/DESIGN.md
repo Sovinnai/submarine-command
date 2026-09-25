@@ -114,11 +114,16 @@ flank and towed. Coverage is relative bearing. Hull has an aft baffle. Flank
 has bow and stern gaps. Towed has broadside beams and endfire ahead and astern.
 Hull and flank sit at keel depth. The towed receiver is keel depth plus a
 published offset, clipped to stay in the water column. Streaming and recovery
-take published times at a published speed. A turn, or the five minutes after
-one, marks the towed receiver unstable. The engine does not calculate cable
-length, layback, the shape of the array during a turn, or a displaced array
-position; bearings are taken at the hull. Each observation names its receiver
-and the error sources it shares. A track is one receiver's history.
+take published times at a published speed, and credit every minute actually
+spent at or below that speed. Recovery stops the towed receiver before that
+step's listening. A turn, or the five minutes after one, marks the towed
+receiver unstable through the complete settling step. The engine does not
+calculate cable length, layback, the shape of the array during a turn, or a
+displaced array position; bearings are taken at the hull. Each observation
+names its receiver and the error sources it shares. A track is one receiver's
+history. A visual sighting is a separate history and is not attached to an
+acoustic contact. Focused analysis requires an acoustic receiver history.
+Receiver frequency response and self-noise parameters are published.
 
 ## Uncertainty and randomness
 
