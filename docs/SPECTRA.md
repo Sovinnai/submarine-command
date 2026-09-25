@@ -1,6 +1,6 @@
 # Narrowband spectra
 
-This is the frequency-measurement model for rules version 0.11. It uses the
+This is the frequency-measurement model for rules version 0.12. It uses the
 transmission-loss function in [Acoustic environment](ACOUSTICS.md). The values
 are fictional game parameters. The module is `submarine_command.spectra`.
 
@@ -63,10 +63,13 @@ For each emitted line, at the source and receiver depths actually held:
 2. Form noise from the shared ambient and self-noise model. If the same
    emitter has broadband covering the line, power-sum that received broadband
    density into the noise.
-3. Signal excess is `SL − TL − NL + DI − DT`. Narrowband DT is 4 dB.
+3. Signal excess is `SL − TL − NL + DI − DT` plus the receiver's published
+   frequency response. Narrowband DT is 4 dB.
    Broadband analysis bands use 8 dB and the same noise level at the band
    center; this rules version does not integrate a noise density across the
-   band. Directivity is the hull value, plus the existing focus adjustment.
+   band. Directivity is the listening array's published value, reduced at
+   towed endfire, plus the existing focus adjustment. Hull and flank use keel
+   depth; a streamed towed array uses the published keel offset.
 4. Detection probability is the same logistic used for other reception, with
    its ceiling and with no independent floor.
 5. The center frequency, before the processing sample, is the horizontal
@@ -95,10 +98,12 @@ on the same step, the reported reception strength is the louder of the two.
 ## Correlation
 
 A 20-minute window has one environmental quality offset, applied to every
-contact, and one fractional frequency bias of ±0.0015, applied to every line
-of every contact. Each line also has one processing-error sample for that
-window. A later integration in the window reuses those draws. Signal excess
-can still change with range, depth, speed and mode, so a line can cross the
+contact and every receiver, and one fractional frequency bias of ±0.0015,
+applied to every line of every contact. Each receiver adds a smaller
+calibration bias of ±0.0008. Each line also has one processing-error sample
+for that window and receiver. A later integration in the window on the same
+receiver reuses those draws. Signal excess can still change with range, depth,
+speed, receiver and mode, so a line can cross the
 fixed detection draw without becoming a new independent roll.
 
 The crew's belief update keeps one feature per window, taken from the latest

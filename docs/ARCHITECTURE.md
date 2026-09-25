@@ -55,7 +55,10 @@ retains shell access under the same account remains policy-only isolation.
 
 ## Known simplifications
 
-- One generic acoustic receiver with automatic track/cross-sensor association.
+- Towed-array geometry is a published keel-depth offset, a relative-bearing
+  mask and a speed/turn stability rule. Cable length, layback and the shape of
+  the array during a turn are not calculated. Hull, flank and towed detections
+  are separate contact histories; the engine does not auto-correlate them.
 - Own-ship turn, acceleration and depth rates resolved on one-minute increments;
   opposing entities change settings at five-minute boundaries without transients.
 - Closed-form path approximations (direct, surface duct, half-channel, single

@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 
 from .acoustics import capability_environment
+from . import arrays
 
 
 class EntityCategory(str, Enum):
@@ -378,20 +379,7 @@ class EntitySpec:
                     "No fuel, battery or snorkeling constraint during this short "
                     "nuclear-submarine patrol; reactor transients are not modeled."
                 ),
-                "sonar": {
-                    "implemented": [
-                        "combined passive reception",
-                        "focused contact analysis",
-                        "numeric narrowband frequency measurements",
-                        "one active pulse with an imperfect range measurement",
-                    ],
-                    "inventory": [
-                        item.public_definition() for item in self.sensors
-                    ],
-                    "towed_array_modeled": False,
-                    "separate_array_geometry_modeled": False,
-                    "spectral_frequencies_modeled": True,
-                },
+                "sonar": self.public_sonar(),
                 "communications": self.public_communications(),
                 "environment": capability_environment(),
                 "weapons": {
@@ -431,6 +419,24 @@ class EntitySpec:
             }
         )
         return result
+
+    def public_sonar(self):
+        sonar = {
+            "implemented": [
+                "combined passive reception",
+                "focused contact analysis",
+                "numeric narrowband frequency measurements",
+                "one active pulse with an imperfect range measurement",
+            ],
+            "inventory": [
+                item.public_definition() for item in self.sensors
+            ],
+            "towed_array_modeled": False,
+            "separate_array_geometry_modeled": False,
+            "spectral_frequencies_modeled": True,
+        }
+        sonar.update(arrays.public_sonar_capabilities(self.identifier))
+        return sonar
 
     def public_communications(self):
         receive = [
@@ -502,22 +508,28 @@ KESTREL = EntitySpec(
     default_mode="standard",
     sensors=(
         Equipment(
-            "integrated_passive",
-            "Combined hull and flank reception used by the current acoustic model.",
+            "hull_array",
+            "Idealized spherical bow receiver at keel depth.",
             "available",
-            "passive and focused acoustic observations",
+            "passive, focused and active reception in published hull coverage",
+        ),
+        Equipment(
+            "flank_array",
+            "Idealized combined port and starboard flank receiver at keel depth.",
+            "available",
+            "passive and focused reception in published flank coverage",
         ),
         Equipment(
             "active_projector",
             "Idealized active projector.",
             "available",
-            "one active pulse and imperfect range observation",
+            "one active pulse and imperfect range observation on the hull receiver",
         ),
         Equipment(
             "towed_array",
-            "Idealized deployable array reserved for the separate-array rules.",
+            "Idealized deployable line array. Depth is a published keel offset, not a cable solution.",
             "stowed",
-            None,
+            "passive and focused reception when streamed",
         ),
     ),
     communications=(

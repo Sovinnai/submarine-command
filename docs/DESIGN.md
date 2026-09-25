@@ -23,7 +23,7 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
-In rules version 0.11, a command window is 5–60 minutes in five-minute increments.
+In rules version 0.12, a command window is 5–60 minutes in five-minute increments.
 Five minutes is the resolution at which the world reports and at which every
 random draw is keyed. Events are therefore located at step boundaries. Opposing
 decisions use start-of-step information, then every platform moves over the same
@@ -107,6 +107,24 @@ Likewise, a frequency label cannot change between turns merely to support a
 new interpretation. Capabilities and environmental estimates are established
 before they are needed for adjudication.
 
+## Receivers
+
+Rules version 0.12 gives the selected platform three idealized receivers: hull,
+flank and towed. Coverage is relative bearing. Hull has an aft baffle. Flank
+has bow and stern gaps. Towed has broadside beams and endfire ahead and astern.
+Hull and flank sit at keel depth. The towed receiver is keel depth plus a
+published offset, clipped to stay in the water column. Streaming and recovery
+take published times at a published speed, and credit every minute actually
+spent at or below that speed. Recovery stops the towed receiver before that
+step's listening. A turn, or the five minutes after one, marks the towed
+receiver unstable through the complete settling step. The engine does not
+calculate cable length, layback, the shape of the array during a turn, or a
+displaced array position; bearings are taken at the hull. Each observation
+names its receiver and the error sources it shares. A track is one receiver's
+history. A visual sighting is a separate history and is not attached to an
+acoustic contact. Focused analysis requires an acoustic receiver history.
+Receiver frequency response and self-noise parameters are published.
+
 ## Uncertainty and randomness
 
 The world has a definite history. The captain receives imperfect evidence about
@@ -125,10 +143,12 @@ compensate for an unexpectedly successful decision.
 
 ## Target motion and crew assessments
 
-Rules version 0.11 estimates contact motion from recorded bearings, their
+Rules version 0.12 estimates contact motion from recorded bearings, their
 timestamps and provenance, and the own-ship positions stored with those
 bearings. The fit assumes constant course and speed on a published grid.
-Acoustic bearings share one bias. Measurements that share an evidence window
+Acoustic bearings on one receiver share one bias. A track is one receiver's
+history; hull, flank and towed detections are not automatically the same
+contact. Measurements that share an evidence window
 are not independent looks. An active range, when one was reported, constrains
 range by the published measurement factor. Every grid point that meets the
 error model stays in the family. The fit does not read hidden contact course,
