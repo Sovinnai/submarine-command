@@ -114,7 +114,6 @@ class ArraySpec:
                 "max_gain_db": self.frequency_gain_max_db,
             },
             "self_noise": {
-                "family": self.self_noise_family,
                 "flow_coefficient": FLOW_NOISE_COEFFICIENT,
                 "factor_floor": FLOW_NOISE_FACTOR_FLOOR,
                 "pump_fault_db": PUMP_FAULT_DB,
