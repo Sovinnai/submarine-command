@@ -155,15 +155,14 @@ Lines that stayed within a published same-line fraction are the same tone; a
 leftover detection beside those is unmatched, not a machinery change. A
 family-wide jump is called only when no line stayed put and both looks have
 the same number of lines; those jumps are paired in frequency order. Unequal
-lists stay unmatched. The operator calls a
-change at 2 sigma and the supervisor at 3 sigma, so one role can hear it before
-the other, and a later look can cross the higher gate. Inside one 20-minute
-evidence window the shared frequency bias and the reused per-line processing
-error cancel, which is why that window stays longer than the five-minute step:
-a new draw every step would hide a small shift. A residual inside the gate is
-not called. A residual larger than the published Doppler bound is read as an
-emitted-frequency change. Received level does not depend on bow, beam, or stern
-aspect.
+lists stay unmatched. The operator calls a change at 2 sigma and the supervisor
+at 3 sigma, so one role can hear it before the other, and a later look can
+cross the higher gate. Inside one 20-minute evidence window the shared
+frequency bias and the reused per-line processing error cancel, which is why
+that window stays longer than the five-minute step: a new draw every step
+would hide a small shift. A residual inside the gate is not called. A residual
+larger than the published Doppler bound is read as an emitted-frequency
+change. Received level does not depend on bow, beam, or stern aspect.
 
 ## What makes a good session
 
