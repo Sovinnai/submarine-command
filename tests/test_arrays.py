@@ -60,7 +60,7 @@ class CoverageTests(unittest.TestCase):
         hull = next(row for row in sonar["receivers"] if row["id"] == "hull_array")
         self.assertEqual(hull["frequency_response"]["slope_db_per_decade"], 8.0)
         self.assertEqual(hull["self_noise"]["flow_coefficient"], arrays.FLOW_NOISE_COEFFICIENT)
-        self.assertEqual(sonar["bearing_bias"]["combined_degrees"], 2)
+        self.assertEqual(sonar["bearing_bias_model"]["combined_degrees"], 2)
 
     def test_unstable_includes_the_settling_endpoint(self):
         self.assertTrue(arrays.is_unstable({"unstable_until": 10}, 10))
