@@ -47,6 +47,29 @@ class CoverageTests(unittest.TestCase):
             arrays.frequency_gain_db(arrays.TOWED, high),
         )
 
+    def test_published_response_parameters_are_the_ones_used(self):
+        spec = arrays.HULL
+        published = spec.public_definition()
+        self.assertEqual(published["flow_scale"], spec.flow_scale)
+        self.assertEqual(published["quiet_speed_knots"], spec.quiet_speed_knots)
+        response = published["frequency_response"]
+        decade = spec.design_frequency_hz * 10
+        expected = min(response["max_gain_db"], response["slope_db_per_decade"])
+        self.assertEqual(arrays.frequency_gain_db(spec, decade), expected)
+        sonar = KESTREL.public_capabilities()["sonar"]
+        hull = next(row for row in sonar["receivers"] if row["id"] == "hull_array")
+        self.assertEqual(hull["frequency_response"]["slope_db_per_decade"], 8.0)
+        self.assertEqual(hull["self_noise"]["flow_coefficient"], arrays.FLOW_NOISE_COEFFICIENT)
+        self.assertEqual(sonar["bearing_bias"]["combined_degrees"], 2)
+
+    def test_unstable_includes_the_settling_endpoint(self):
+        self.assertTrue(arrays.is_unstable({"unstable_until": 10}, 10))
+        self.assertFalse(arrays.is_unstable({"unstable_until": 10}, 15))
+        self.assertFalse(arrays.is_unstable({"unstable_until": 0}, 0))
+        entity = {"course": 0.0, "depth": 400.0, "equipment": {"towed_array": arrays.STREAMED}}
+        snap = arrays.snapshot(arrays.TOWED, entity, water_depth_feet=2400.0, unstable=True)
+        self.assertEqual(snap["coverage"], arrays.UNSTABLE)
+
     def test_pump_fault_couples_more_to_hull_than_towed(self):
         hull = arrays.self_noise_adjustment_db(arrays.HULL, 5.0, pump_fault=True)
         towed = arrays.self_noise_adjustment_db(arrays.TOWED, 5.0, pump_fault=True)
@@ -140,6 +163,72 @@ class DeploymentTests(unittest.TestCase):
             any(entry["category"] == "array_unstable" for entry in game["state"]["reports"])
         )
 
+    def test_partial_stream_minutes_are_credited_while_decelerating(self):
+        game = e.initialize("ef" * 32)
+        e.apply_order(game, self.order(game, speed=12, minutes=15, id="sprint"))
+        self.assertGreater(game["state"]["own"]["speed"], 8)
+        e.apply_order(
+            game,
+            self.order(game, activity="stream_array", speed=6, minutes=5, id="slow"),
+        )
+        progress = game["state"]["towed"]["progress_minutes"]
+        self.assertGreater(progress, 0)
+        self.assertLess(progress, 5)
+        self.assertEqual(game["state"]["towed"]["deployment"], arrays.STREAMING)
+
+    def test_towed_stays_unstable_through_the_settling_step(self):
+        game = e.initialize("aa" * 32)
+        e.apply_order(
+            game, self.order(game, activity="stream_array", speed=6, minutes=20, id="stream")
+        )
+        e.apply_order(
+            game, self.order(game, course=180, speed=6, minutes=5, id="turn")
+        )
+        until = game["state"]["towed"]["unstable_until"]
+        self.assertEqual(until, game["state"]["t"] + arrays.TURN_SETTLE_MINUTES)
+        from unittest import mock
+        from submarine_command import acoustics
+        actor = game["state"]["actors"][0]
+        actor.update(x=0.4, y=0.0)
+        game["state"]["own"].update(x=0.0, y=0.0)
+        with mock.patch.object(acoustics, "detection_probability", return_value=0.99):
+            e.apply_order(game, self.order(game, speed=6, minutes=5, id="settle"))
+        self.assertEqual(game["state"]["t"], until)
+        self.assertTrue(arrays.is_unstable(game["state"]["towed"], game["state"]["t"]))
+        self.assertIsNone(e._track_for_receiver(game["state"], actor["id"], "towed_array"))
+        row = next(
+            item for item in e.public_view(game)["own_ship"]["sonar_receivers"]
+            if item["id"] == "towed_array"
+        )
+        self.assertEqual(row["coverage"], arrays.UNSTABLE)
+
+    def test_recovery_stops_towed_listening_on_the_first_tick(self):
+        game = e.initialize("ab" * 32)
+        e.apply_order(
+            game, self.order(game, activity="stream_array", speed=6, minutes=20, id="stream")
+        )
+        state = game["state"]
+        actor = state["actors"][0]
+        actor.update(x=0.4, y=0.0)
+        state["own"].update(course=0.0, x=0.0, y=0.0)
+        from unittest import mock
+        from submarine_command import acoustics
+        dice = e.Dice(game["seed"], state["rng_trace"])
+        with mock.patch.object(acoustics, "detection_probability", return_value=0.99):
+            e.observe_contact(state, actor, dice, array_spec=arrays.TOWED)
+            towed = e._track_for_receiver(state, actor["id"], "towed_array")
+            self.assertIsNotNone(towed)
+            last = towed["last"]
+            looks_before = [key for key in state["looks"] if ":towed_array:" in key]
+            e.apply_order(
+                game,
+                self.order(game, activity="recover_array", speed=6, minutes=5, id="recover"),
+            )
+        self.assertEqual(towed["last"], last)
+        looks_after = [key for key in state["looks"] if ":towed_array:" in key]
+        self.assertEqual(looks_after, looks_before)
+        self.assertEqual(state["towed"]["deployment"], arrays.RECOVERING)
+
 
 class ProvenanceTests(unittest.TestCase):
     def test_opening_contact_is_hull_and_names_error_sources(self):
@@ -218,6 +307,87 @@ class ProvenanceTests(unittest.TestCase):
             e._focus_directivity_db(state, {"id": hull["actor"]}, "focus", "flank_array"),
             -2.0,
         )
+
+    def test_mast_sighting_is_not_attached_to_an_acoustic_track(self):
+        game = e.initialize("ab" * 32)
+        state = game["state"]
+        merchant = next(actor for actor in state["actors"] if actor["depth"] == 0)
+        merchant.update(x=0.3, y=0.0)
+        state["own"].update(x=0.0, y=0.0, course=90.0)
+        from unittest import mock
+        from submarine_command import acoustics
+        dice = e.Dice(game["seed"], state["rng_trace"])
+        with mock.patch.object(acoustics, "detection_probability", return_value=0.99):
+            e.observe_contact(state, merchant, dice, array_spec=arrays.HULL)
+        hull = e._track_for_receiver(state, merchant["id"], "hull_array")
+        self.assertIsNotNone(hull)
+        acoustic_count = len(hull["observations"])
+
+        class SureDice:
+            def u(self, label):
+                return 0.0
+
+            def between(self, label, low, high):
+                return 0.0
+
+        e.mast_observations(state, SureDice())
+        visual = next(
+            track for track in state["tracks"]
+            if track.get("receiver_kind") == "visual" and track["actor"] == merchant["id"]
+        )
+        self.assertNotEqual(visual["id"], hull["id"])
+        self.assertEqual(len(hull["observations"]), acoustic_count)
+        self.assertIsNone(hull["visual"])
+        self.assertIsNotNone(visual["visual"])
+
+    def test_focus_rejects_a_visual_only_contact(self):
+        game = e.initialize("ab" * 32)
+        state = game["state"]
+        merchant = next(actor for actor in state["actors"] if actor["depth"] == 0)
+        merchant.update(x=0.3, y=0.0)
+        state["own"].update(x=0.0, y=0.0)
+
+        class SureDice:
+            def u(self, label):
+                return 0.0
+
+            def between(self, label, low, high):
+                return 0.0
+
+        e.mast_observations(state, SureDice())
+        visual = next(
+            track for track in state["tracks"] if track.get("receiver_kind") == "visual"
+        )
+        before = e.canonical(game)
+        with self.assertRaises(ValueError) as err:
+            e.apply_order(
+                game,
+                {
+                    "id": "focus-vis",
+                    "expected_turn": len(game["events"]),
+                    "activity": "focus",
+                    "focus": visual["id"],
+                    "minutes": 5,
+                    "interrupt_on": [],
+                    "course": state["own"]["course"],
+                    "speed": state["own"]["speed"],
+                    "depth": state["own"]["depth"],
+                    "operating_mode": state["own"]["operating_mode"],
+                },
+            )
+        self.assertIn("visual", str(err.exception).lower())
+        self.assertEqual(before, e.canonical(game))
+
+    def test_combined_bearing_bias_stays_inside_the_motion_bound(self):
+        from submarine_command.observations import ACOUSTIC_BIAS_DEGREES
+        for seed in ("ab" * 32, "11" * 32, "ff" * 32, "99" * 32):
+            game = e.initialize(seed)
+            shared = game["state"]["bearing_bias"]
+            for residual in game["state"]["array_bearing_bias"].values():
+                self.assertLessEqual(
+                    abs(shared + residual),
+                    ACOUSTIC_BIAS_DEGREES + 1e-9,
+                )
 
 
 if __name__ == "__main__":
