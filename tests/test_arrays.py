@@ -229,6 +229,38 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(looks_after, looks_before)
         self.assertEqual(state["towed"]["deployment"], arrays.RECOVERING)
 
+    def test_turn_on_the_streaming_completion_step_leaves_the_array_unstable(self):
+        game = e.initialize("aa" * 32)
+        e.apply_order(
+            game, self.order(game, activity="stream_array", speed=6, minutes=10, id="part")
+        )
+        self.assertEqual(game["state"]["towed"]["deployment"], arrays.STREAMING)
+        self.assertEqual(game["state"]["towed"]["progress_minutes"], 10)
+        e.apply_order(
+            game,
+            self.order(
+                game,
+                activity="stream_array",
+                course=180,
+                speed=6,
+                minutes=5,
+                id="finish-turn",
+            ),
+        )
+        self.assertEqual(game["state"]["towed"]["deployment"], arrays.STREAMED)
+        self.assertTrue(arrays.is_unstable(game["state"]["towed"], game["state"]["t"]))
+        self.assertTrue(
+            any(entry["category"] == "array_unstable" for entry in game["state"]["reports"])
+        )
+        actor = game["state"]["actors"][0]
+        actor.update(x=0.4, y=0.0)
+        game["state"]["own"].update(x=0.0, y=0.0)
+        from unittest import mock
+        from submarine_command import acoustics
+        with mock.patch.object(acoustics, "detection_probability", return_value=0.99):
+            e.apply_order(game, self.order(game, speed=6, minutes=5, id="listen"))
+        self.assertIsNone(e._track_for_receiver(game["state"], actor["id"], "towed_array"))
+
 
 class ProvenanceTests(unittest.TestCase):
     def test_opening_contact_is_hull_and_names_error_sources(self):
