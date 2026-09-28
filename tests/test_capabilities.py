@@ -70,7 +70,8 @@ class CapabilityTests(unittest.TestCase):
 
     def test_unimplemented_capabilities_are_explicit(self):
         public = KESTREL.public_capabilities()
-        self.assertFalse(public["sonar"]["towed_array_modeled"])
+        self.assertTrue(public["sonar"]["towed_array_modeled"])
+        self.assertTrue(public["sonar"]["separate_array_geometry_modeled"])
         self.assertTrue(public["environment"]["full_sound_speed_profile_modeled"])
         self.assertTrue(public["environment"]["convergence_zone_modeled"])
         self.assertTrue(public["environment"]["bottom_bounce_modeled"])
@@ -97,7 +98,11 @@ class CapabilityTests(unittest.TestCase):
             )
             self.assertTrue(antenna["implemented"])
         towed = next(item for item in public["sensors"] if item["id"] == "towed_array")
-        self.assertFalse(towed["implemented"])
+        self.assertTrue(towed["implemented"])
+        self.assertEqual(
+            [item["id"] for item in public["sensors"]],
+            ["hull_array", "flank_array", "active_projector", "towed_array"],
+        )
         self.assertTrue(public["measurements"]["numeric_narrowband_frequencies"])
         self.assertTrue(public["sonar"]["spectral_frequencies_modeled"])
         model = engine.capability_report()["narrowband_model"]

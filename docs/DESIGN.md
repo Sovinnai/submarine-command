@@ -108,6 +108,24 @@ Likewise, a frequency label cannot change between turns merely to support a
 new interpretation. Capabilities and environmental estimates are established
 before they are needed for adjudication.
 
+## Receivers
+
+Rules version 0.12 gives the selected platform three idealized receivers: hull,
+flank and towed. Coverage is relative bearing. Hull has an aft baffle. Flank
+has bow and stern gaps. Towed has broadside beams and endfire ahead and astern.
+Hull and flank sit at keel depth. The towed receiver is keel depth plus a
+published offset, clipped to stay in the water column. Streaming and recovery
+take published times at a published speed, and credit every minute actually
+spent at or below that speed. Recovery stops the towed receiver before that
+step's listening. A turn, or the five minutes after one, marks the towed
+receiver unstable through the complete settling step. The engine does not
+calculate cable length, layback, the shape of the array during a turn, or a
+displaced array position; bearings are taken at the hull. Each observation
+names its receiver and the error sources it shares. A track is one receiver's
+history. A visual sighting is a separate history and is not attached to an
+acoustic contact. Focused analysis requires an acoustic receiver history.
+Receiver frequency response and self-noise parameters are published.
+
 ## Uncertainty and randomness
 
 The world has a definite history. The captain receives imperfect evidence about
@@ -129,7 +147,9 @@ compensate for an unexpectedly successful decision.
 Rules version 0.12 estimates contact motion from recorded bearings, their
 timestamps and provenance, and the own-ship positions stored with those
 bearings. The fit assumes constant course and speed on a published grid.
-Acoustic bearings share one bias. Measurements that share an evidence window
+Acoustic bearings on one receiver share one bias. A track is one receiver's
+history; hull, flank and towed detections are not automatically the same
+contact. Measurements that share an evidence window
 are not independent looks. An active range, when one was reported, constrains
 range by the published measurement factor. Every grid point that meets the
 error model stays in the family. The fit does not read hidden contact course,
@@ -158,11 +178,11 @@ the same number of lines; those jumps are paired in frequency order. Unequal
 lists stay unmatched. The operator calls a change at 2 sigma and the supervisor
 at 3 sigma, so one role can hear it before the other, and a later look can
 cross the higher gate. Inside one 20-minute evidence window the shared
-frequency bias and the reused per-line processing error cancel, which is why
-that window stays longer than the five-minute step: a new draw every step
-would hide a small shift. A residual inside the gate is not called. A residual
-larger than the published Doppler bound is read as an emitted-frequency
-change. Received level does not depend on bow, beam, or stern aspect.
+environmental and receiver calibration bias and the reused per-line processing
+error cancel, which is why that window stays longer than the five-minute step:
+a new draw every step would hide a small shift. A residual inside the gate is
+not called. A residual larger than the published Doppler bound is read as an
+emitted-frequency change. Received level does not depend on bow, beam, or stern aspect.
 
 ## What makes a good session
 

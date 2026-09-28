@@ -153,11 +153,17 @@ class EngineTests(unittest.TestCase):
         }
         with mock.patch.object(spectra, "measure_contact", return_value=loud):
             state = e.new_world("ab" * 32)
-        self.assertEqual(len(state["tracks"]), len(state["actors"]))
-        self.assertEqual(
-            {track["actor"] for track in state["tracks"]},
-            {actor["id"] for actor in state["actors"]},
-        )
+        hull_looks = {
+            key.split(":")[0] for key in state["looks"] if ":hull_array:" in key
+        }
+        flank_looks = {
+            key.split(":")[0] for key in state["looks"] if ":flank_array:" in key
+        }
+        self.assertEqual(hull_looks, {actor["id"] for actor in state["actors"]})
+        self.assertEqual(flank_looks, {actor["id"] for actor in state["actors"]})
+        self.assertFalse(any(":towed_array:" in key for key in state["looks"]))
+        self.assertTrue(state["tracks"])
+        self.assertTrue(all(track["actor"] in hull_looks for track in state["tracks"]))
 
     def test_completed_mast_cycle_reports_a_negative(self):
         state = self.game["state"]
