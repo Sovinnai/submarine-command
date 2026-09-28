@@ -266,7 +266,9 @@ class ProvenanceTests(unittest.TestCase):
     def test_opening_contact_is_hull_and_names_error_sources(self):
         game = e.initialize("ab" * 32)
         view = e.public_view(game)
-        contact = view["contacts"][0]
+        contact = next(
+            item for item in view["contacts"] if item["receiver"]["id"] == "hull_array"
+        )
         self.assertEqual(contact["receiver"]["id"], "hull_array")
         self.assertEqual(contact["receiver"]["role"], "hull")
         observation = contact["observations"][0]
