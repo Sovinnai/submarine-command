@@ -23,7 +23,7 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
-In rules version 0.12, a command window is 5–60 minutes in five-minute increments.
+In rules version 0.13, a command window is 5–60 minutes in five-minute increments.
 Five minutes is the resolution at which the world reports and at which every
 random draw is keyed. Events are therefore located at step boundaries. Opposing
 decisions use start-of-step information, then every platform moves over the same
@@ -126,7 +126,7 @@ compensate for an unexpectedly successful decision.
 
 ## Target motion and crew assessments
 
-Rules version 0.12 estimates contact motion from recorded bearings, their
+Rules version 0.13 estimates contact motion from recorded bearings, their
 timestamps and provenance, and the own-ship positions stored with those
 bearings. The fit assumes constant course and speed on a published grid.
 Acoustic bearings share one bias. Measurements that share an evidence window
@@ -163,6 +163,43 @@ that window stays longer than the five-minute step: a new draw every step
 would hide a small shift. A residual inside the gate is not called. A residual
 larger than the published Doppler bound is read as an emitted-frequency
 change. Received level does not depend on bow, beam, or stern aspect.
+
+## Opposition, weapons and consequences
+
+Rules version 0.13 gives each opposing unit its own detection record, belief,
+mission doctrine and operating state. A detection stores the noisy fix that
+unit holds. An engage doctrine may launch one published weapon at that fix
+while the fix is still within 15 minutes. Passage and avoid doctrines do not
+fire. Avoid still turns away from the unit's own fix. Physics uses true
+geometry to score the shot; the decision does not read the true position.
+
+A launch is a five-minute cycle. The order names the inventory item, the
+target and the report ids it cites. The engine checks four different gates
+before anything changes: an employment rule exists, the ordered depth and
+speed are inside that rule, at least one round remains, and the patrol
+authorization allows that kind of launch. Glass Strait authorizes
+countermeasures and does not authorize offensive weapons. A rejected order
+expends neither time nor inventory.
+
+An offensive round is aimed with the named contact's latest bearing and, when
+the observation has one, its measured range. Otherwise the aim uses the
+published range-band midpoint. Hit probability is 0 outside the range band or
+when the true position lies outside the published lethal radius of the
+aimpoint. Inside both, probability rises toward the near edge of the band and
+drops by an active noise-maker penalty, with a cap of 0.92. One draw, named
+by shooter, weapon, target and time, decides the result.
+
+A hit records one mobility casualty. The affected unit stops and keeps that
+state. A second hit does not add another failure. A miss removes the expended
+round and adds no new unit. A decoy is placed along the launching unit's
+course and can draw a later seeker away from its previous fix. A noise maker
+reduces the probability of a later incoming round for its published minutes.
+Neither countermeasure changes own-ship source level.
+
+The debrief keeps four accounts: decision quality from the order and the
+reports it cited, the evidence named at the time, the draw and the probability
+that produced each uncertain result, and engine errors. A verified replay
+leaves the engine-error list empty.
 
 ## What makes a good session
 

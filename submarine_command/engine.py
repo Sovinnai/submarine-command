@@ -36,11 +36,12 @@ from .platforms import (
     WARSHIP,
     EntityCategory,
     LinkDirection,
+    OPPONENT_FIRE_MEMORY_MINUTES,
     get_spec,
     public_entity_catalog,
 )
 
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 TICK = 5
 MANEUVER_STEP = 1
 END = 290
@@ -84,11 +85,12 @@ COMMAND_CONTRACT = {
         "mast": "Mast deployment, visual observation, and recovery form a five-minute cycle concurrent with movement. The cycle requires the whole five minutes inside the published mast depth and speed envelope; a step spent transiting toward mast depth defers it and reports the achieved and commanded settings. A completed cycle reports each visual contact or an explicit negative when none was seen. Results are available at the step endpoint.",
         "communications": "Receive and transmit are separate published modes, and the order names one with link. Each attempt occupies one five-minute step, concurrent with movement and passive observation, and counts only when the whole step is inside that mode's depth and speed envelope. A step spent reaching the envelope is deferred and reported. Mast modes raise, attempt, and house the mast inside the cycle. Buoyant receive is receive-only: deployment and retrieval take their published times, the antenna stays streamed and limits later orders until retrieval completes, and a bulletin can be copied only after its scheduled time plus that mode's latency. A usable receive link or an acknowledged transmission completes the task. A failed link may be retried unless radio_failure is an interrupt. Channel quality is one draw per 20-minute window, shared by every mode and shifted by the mode's published reliability offset, so repeated attempts in that window agree. A completed mast transmission radiates. Surface-combatant intercept uses that same draw and the published range. The transmission does not change own-ship acoustic source level.",
         "repair": "Repair needs 20 productive minutes at no more than the published repair speed. Only the minutes actually spent at or below that speed count, so a step spent decelerating earns partial credit. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
+        "employment": "An employ order names one published weapon or countermeasure, a target, and a basis of existing report ids. The ordered depth and speed must lie inside that item's envelope. The launch needs the whole five-minute step inside the envelope; a step spent reaching it is deferred and expends nothing. One completed launch expends one unit and ends the command window. Offensive rounds are aimed from the named contact's latest observation. Countermeasures use target none. Inventory, the employment rule, patrol authorization and this order are checked separately, and a failed check changes nothing.",
         "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. Own-ship narrowband lines follow the published operating-state spectrum rules, but opposing detection does not use that spectrum. Selecting a quieter plant state carries no direct counter-detection benefit beyond the speed it permits. Opposing detection uses own-ship speed, the shared transmission-loss model, receiver depth and active transmission.",
     },
     "order_fields": {
         "required": ["id", "expected_turn", "activity", "minutes", "course", "speed", "depth", "operating_mode", "interrupt_on"],
-        "conditional": {"focus": "focus activity", "link": "receive, transmit, or retrieve activity", "assessment": "transmit activity", "message": "transmit activity", "basis": "transmit activity"},
+        "conditional": {"focus": "focus activity", "link": "receive, transmit, or retrieve activity", "assessment": "transmit activity", "message": "transmit activity", "basis": "transmit or employ activity", "weapon": "employ activity", "target": "employ activity"},
         "end_order": ["id", "expected_turn", "activity"],
         "description": "Every listed field must be stated explicitly. The engine supplies no default for any order field: an omitted field is rejected before any state changes rather than being filled in from current or previous settings. An empty interrupt_on list means no interrupt is selected, and an empty basis list means the assessment cites no report.",
     },
@@ -97,6 +99,7 @@ COMMAND_CONTRACT = {
 PUBLIC_REPORT_FIELDS = {
     "id", "time", "elapsed_minutes", "department", "category", "text",
     "contact", "observation", "visual", "message_id", "transmitted", "link",
+    "weapon",
 }
 
 
@@ -201,7 +204,18 @@ def advance_own(state, minutes):
         envelopes.append(("repair", lambda depth, speed, limit=limit: speed <= limit))
     for mode in spec.communication_modes:
         envelopes.append((mode.identifier, mode.allows))
+    for rule in spec.employment_rules:
+        envelopes.append((f"weapon:{rule.identifier}", rule.allows))
     within = {name: 0.0 for name, _allows in envelopes}
+    if own.get("casualty"):
+        for name, allows in envelopes:
+            if allows(own["depth"], own["speed"]):
+                within[name] = float(minutes)
+        return {
+            "mast_minutes": within.get("mast", 0.0),
+            "repair_minutes": within.get("repair", 0.0),
+            "envelopes": within,
+        }
     remaining = minutes
     while remaining > 1e-9:
         span = min(MANEUVER_STEP, remaining)
@@ -326,6 +340,8 @@ def advance_entity_components(entity):
 
 def prepare_actor_step(state, actor, dice):
     """Apply bounded actor behavior without access to the player's hidden truth."""
+    if actor.get("casualty"):
+        return
     spec = entity_spec(actor)
     t = state["t"]
     if spec.category == EntityCategory.DIESEL_SUBMARINE:
@@ -537,6 +553,11 @@ def new_world(seed):
              "actors": [], "tracks": [], "reports": [], "rng_trace": [], "focus": None,
              "pump_fault": False, "repair_progress": 0, "received": [], "sent": [],
              "antennas": initial_antennas(KESTREL), "radio_intercepts": [],
+             "authorization": {
+                 "offensive_weapons": False,
+                 "countermeasures": True,
+             },
+             "engagements": [], "countermeasures_active": [],
              "ended": False, "end_reason": None, "deadline_announced": False,
              "maneuvering": False, "last_action_report_start": 0}
     dice = Dice(seed, state["rng_trace"])
@@ -572,6 +593,9 @@ def new_world(seed):
         last_heard=None,
         evaded=False,
         name=dice.choose("initial:a-name", ["Cormorant", "Morrow", "Solace"]),
+        doctrine="avoid" if kind == "submerged" else "passage",
+        observations=[],
+        belief={"assessment": "no_contact"},
         intent=(
             "Transit east through the passage; avoid an observer if one is detected."
             if kind == "submerged"
@@ -604,6 +628,9 @@ def new_world(seed):
                 last_heard=None,
                 evaded=False,
                 name=name,
+                doctrine="passage",
+                observations=[],
+                belief={"assessment": "no_contact"},
                 intent="Maintain an established westbound passage.",
             )
         )
@@ -640,12 +667,67 @@ def initialize(seed=None):
             "commitment": commitment, "events": [], "head": commitment}
 
 
-def opponent_step(state, actor, dice, active):
-    if entity_spec(actor).category not in (
-        EntityCategory.SSN,
-        EntityCategory.DIESEL_SUBMARINE,
-    ):
-        return
+def employment_probability(rule, range_nm, aim_error_nm, mask_penalty=0.0):
+    """Published hit chance from true range, evidence aimpoint and mask state."""
+    if aim_error_nm > rule.lethal_radius_nm:
+        return 0.0
+    span = rule.maximum_range_nm - rule.minimum_range_nm
+    if span <= 0 or not (rule.minimum_range_nm <= range_nm <= rule.maximum_range_nm):
+        return 0.0
+    closeness = (rule.maximum_range_nm - range_nm) / span
+    probability = rule.base_probability + rule.range_bonus * closeness - mask_penalty
+    return min(0.92, max(0.0, probability))
+
+
+def apply_mobility_casualty(entity, elapsed, weapon, shooter):
+    """Record one persistent mobility loss. A second hit adds nothing further."""
+    if entity.get("casualty"):
+        return False
+    entity["casualty"] = {
+        "effect": "mobility_casualty",
+        "since_elapsed_minutes": elapsed,
+        "weapon": weapon,
+        "shooter": shooter,
+    }
+    entity["speed"] = 0.0
+    entity["evaded"] = True
+    return True
+
+
+def _remember_contact(actor, x, y, elapsed, source):
+    """Store the fix the actor actually holds. The true position is not copied."""
+    heard = {"x": x, "y": y, "time": elapsed, "source": source}
+    actor["aware"] = True
+    actor["last_heard"] = heard
+    actor.setdefault("observations", []).append(dict(heard))
+    actor["belief"] = {
+        "assessment": "contact_held",
+        "last_time": elapsed,
+        "source": source,
+    }
+
+
+def _active_decoy(state):
+    active = [
+        item for item in state.get("countermeasures_active", [])
+        if item["until"] > state["t"] and item["effect"] == "seduce"
+    ]
+    return active[-1] if active else None
+
+
+def _mask_penalty(state):
+    own = state["own"]
+    if own.get("mask_until", 0) > state["t"]:
+        return own.get("mask_penalty", 0.0)
+    return 0.0
+
+
+def _log_engagement(state, **fields):
+    state.setdefault("engagements", []).append(fields)
+
+
+def _acoustic_belief(state, actor, dice, active):
+    """Update one opponent's detection record from its own receiver."""
     own, t = state["own"], state["t"]
     frequency = acoustics.representative_frequency_hz(
         "submerged", "active" if active else "passive"
@@ -672,14 +754,119 @@ def opponent_step(state, actor, dice, active):
     probability = acoustics.detection_probability(
         excess, ceiling=0.70 if not active else 0.98
     )
-    if dice.u(f"opponent-hears:{actor['id']}:{t}") < probability:
-        actor["aware"] = True
-        actor["last_heard"] = {"x": own["x"] + dice.between(f"opponent-fix-x:{t}", -2, 2),
-                               "y": own["y"] + dice.between(f"opponent-fix-y:{t}", -2, 2), "time": t}
-    if actor["aware"] and not actor["evaded"]:
-        # Only its last detected, noisy fix informs the decision; no access to future own-ship moves.
+    if dice.u(f"opponent-hears:{actor['id']}:{t}") >= probability:
+        return
+    fix_x = own["x"] + dice.between(f"opponent-fix-x:{t}", -2, 2)
+    fix_y = own["y"] + dice.between(f"opponent-fix-y:{t}", -2, 2)
+    source = "acoustic"
+    decoy = _active_decoy(state)
+    if decoy is not None:
+        label = f"decoy-seduce:{actor['id']}:{t}"
+        draw = dice.u(label)
+        seduced = draw < decoy["seduce_probability"]
+        _log_engagement(
+            state,
+            elapsed_minutes=t,
+            kind="seduction",
+            shooter=actor["id"],
+            weapon=decoy["weapon"],
+            target_label="decoy",
+            order_id=None,
+            basis=[],
+            probability=decoy["seduce_probability"],
+            draw=draw,
+            draw_label=label,
+            outcome="seduced" if seduced else "not_seduced",
+            casualty_applied=False,
+        )
+        if seduced:
+            fix_x, fix_y = decoy["x"], decoy["y"]
+            source = "decoy"
+    _remember_contact(actor, fix_x, fix_y, t, source)
+
+
+def _opponent_weapon(state, actor, dice):
+    """Fire only from this actor's belief, doctrine, inventory and envelope."""
+    heard = actor.get("last_heard")
+    if not actor.get("aware") or not heard:
+        return
+    t = state["t"]
+    if t - heard["time"] > OPPONENT_FIRE_MEMORY_MINUTES:
+        return
+    if actor.get("weapon_busy_until", 0) > t:
+        return
+    rule = next(
+        (
+            item for item in entity_spec(actor).employment_rules
+            if item.kind.value == "offensive"
+            and actor.get("inventory", {}).get(item.identifier, 0) > 0
+            and item.allows(actor["depth"], actor["speed"])
+        ),
+        None,
+    )
+    if rule is None:
+        return
+    own = state["own"]
+    probability = employment_probability(
+        rule, distance(actor, own), distance(heard, own), _mask_penalty(state)
+    )
+    label = f"weapon:{actor['id']}:{rule.identifier}:own-kestrel:{t}"
+    draw = dice.u(label)
+    actor["inventory"][rule.identifier] -= 1
+    actor["weapon_busy_until"] = t + rule.cycle_minutes
+    hit = draw < probability
+    casualty_applied = (
+        apply_mobility_casualty(own, t, rule.identifier, actor["id"]) if hit else False
+    )
+    if hit:
+        report(
+            state, "Weapons",
+            "A detonation transient was recorded on the boat. Mobility is lost.",
+            "incoming_weapon",
+        )
+    _log_engagement(
+        state,
+        elapsed_minutes=t,
+        kind="offensive",
+        shooter=actor["id"],
+        weapon=rule.identifier,
+        target_label="own-ship",
+        order_id=None,
+        basis=[],
+        probability=probability,
+        draw=draw,
+        draw_label=label,
+        outcome="detonation" if hit else "no_detonation",
+        casualty_applied=casualty_applied,
+    )
+
+
+def opponent_step(state, actor, dice, active):
+    if actor.get("casualty"):
+        return
+    spec = entity_spec(actor)
+    if spec.category not in (
+        EntityCategory.SSN,
+        EntityCategory.DIESEL_SUBMARINE,
+        EntityCategory.SURFACE_WARSHIP,
+    ):
+        return
+    # A passage warship keeps the previous rules: no new acoustic search.
+    if spec.category == EntityCategory.SURFACE_WARSHIP and actor.get("doctrine") != "engage":
+        return
+    _acoustic_belief(state, actor, dice, active)
+    if actor.get("doctrine") == "engage":
+        _opponent_weapon(state, actor, dice)
+        return
+    if spec.category not in (
+        EntityCategory.SSN,
+        EntityCategory.DIESEL_SUBMARINE,
+    ):
+        return
+    if actor.get("aware") and not actor.get("evaded"):
+        # Only its last detected, noisy fix informs the decision.
         actor["course"] = bearing(actor["last_heard"], actor)
-        actor["speed"] = dice.between(f"opponent-evasion-speed:{t}", 6, 10)
+        actor["speed"] = dice.between(f"opponent-evasion-speed:{state['t']}", 6, 10)
         actor["evaded"] = True
 
 
@@ -809,13 +996,15 @@ def apply_radio_exposure(state, mode, channel):
             continue
         if distance(own, actor) > mode.intercept_range_nm:
             continue
-        actor["aware"] = True
-        actor["last_heard"] = {
-            "x": own["x"],
-            "y": own["y"],
-            "time": state["t"],
-            "source": "radio_intercept",
-        }
+        heard_bearing = bearing(actor, own)
+        angle = math.radians(heard_bearing)
+        _remember_contact(
+            actor,
+            actor["x"] + math.sin(angle) * mode.intercept_range_nm,
+            actor["y"] + math.cos(angle) * mode.intercept_range_nm,
+            state["t"],
+            "radio_intercept",
+        )
         state["radio_intercepts"].append({
             "actor": actor["id"],
             "time": state["t"],
@@ -951,9 +1140,131 @@ def _attempt_link(state, dice, order, mode):
     )
 
 
+def _aim_from_track(own, track, rule):
+    """Aim with the latest observation. A missing range uses the band midpoint."""
+    observation = track["observations"][-1]
+    measured = observation.get("range_estimate_nm")
+    ranged = measured is not None
+    span = measured if ranged else (rule.minimum_range_nm + rule.maximum_range_nm) / 2
+    angle = math.radians(observation["bearing_true"])
+    return {
+        "x": own["x"] + math.sin(angle) * span,
+        "y": own["y"] + math.cos(angle) * span,
+        "ranged": ranged,
+    }
+
+
+def apply_employment(state, dice, order, achieved):
+    """Resolve one launch after the step has been inside its envelope."""
+    spec = entity_spec(state["own"])
+    rule = spec.employment(order["weapon"])
+    inside = achieved["envelopes"].get(f"weapon:{rule.identifier}", 0.0)
+    if inside < TICK:
+        report(
+            state, "Ship control",
+            deferred_text(state, "employ", inside, rule.identifier),
+            "activity_deferred",
+        )
+        return
+    own = state["own"]
+    own["inventory"][rule.identifier] -= 1
+    remaining = own["inventory"][rule.identifier]
+    contact_report_ids = []
+    ranged = None
+    probability = None
+    draw = None
+    label = None
+    casualty_applied = False
+    if rule.effect.value == "seduce":
+        angle = math.radians(own["course"])
+        state["countermeasures_active"].append({
+            "effect": "seduce",
+            "weapon": rule.identifier,
+            "x": own["x"] + math.sin(angle) * rule.launch_distance_nm,
+            "y": own["y"] + math.cos(angle) * rule.launch_distance_nm,
+            "until": state["t"] + rule.effect_minutes,
+            "seduce_probability": rule.seduce_probability,
+        })
+        outcome = "deployed"
+        text = (
+            f"{rule.identifier} deployed along the present course. "
+            f"{remaining} remain."
+        )
+    elif rule.effect.value == "mask":
+        own["mask_until"] = state["t"] + rule.effect_minutes
+        own["mask_penalty"] = rule.mask_penalty
+        outcome = "deployed"
+        text = (
+            f"{rule.identifier} deployed. It masks incoming rounds for "
+            f"{rule.effect_minutes} minutes. {remaining} remain."
+        )
+    else:
+        track = next(item for item in state["tracks"] if item["id"] == order["target"])
+        actor = next(item for item in state["actors"] if item["id"] == track["actor"])
+        aim = _aim_from_track(own, track, rule)
+        ranged = aim["ranged"]
+        contact_report_ids = [
+            item["report_id"] for item in track["observations"] if item.get("report_id")
+        ]
+        probability = employment_probability(
+            rule, distance(own, actor), distance(aim, actor), 0.0
+        )
+        label = f"weapon:{own['id']}:{rule.identifier}:{track['id']}:{state['t']}"
+        draw = dice.u(label)
+        hit = draw < probability
+        outcome = "detonation" if hit else "no_detonation"
+        if hit:
+            casualty_applied = apply_mobility_casualty(
+                actor, state["t"], rule.identifier, own["id"]
+            )
+        text = (
+            f"{rule.identifier} launched at {track['id']}. "
+            + (
+                "A detonation transient was recorded on that bearing."
+                if hit else
+                "The run ended without a recorded detonation."
+            )
+            + f" {remaining} remain."
+        )
+    _log_engagement(
+        state,
+        elapsed_minutes=state["t"],
+        kind=rule.kind.value,
+        shooter=own["id"],
+        weapon=rule.identifier,
+        target_label=order["target"],
+        order_id=order["id"],
+        basis=list(order["basis"]),
+        contact_report_ids=contact_report_ids,
+        aim_used_measured_range=ranged,
+        probability=probability,
+        draw=draw,
+        draw_label=label,
+        outcome=outcome,
+        casualty_applied=casualty_applied,
+    )
+    extra = {
+        "weapon": {
+            "id": rule.identifier,
+            "outcome": outcome,
+            "inventory_remaining": remaining,
+        }
+    }
+    if order["target"] != "none":
+        extra["contact"] = order["target"]
+    report(state, "Weapons", text, "weapon_resolved", **extra)
+
+
 def tick_world(state, dice, order, first_tick):
     state["t"] += TICK
     t = state["t"]
+    state["countermeasures_active"] = [
+        item for item in state["countermeasures_active"]
+        if item["until"] > t
+    ]
+    if state["own"].get("mask_until", 0) <= t:
+        state["own"].pop("mask_until", None)
+        state["own"].pop("mask_penalty", None)
     active = order["activity"] == "active" and first_tick
     # Decisions use the common start-of-step geometry. Movement is then
     # integrated for every platform over the same elapsed interval.
@@ -964,7 +1275,8 @@ def tick_world(state, dice, order, first_tick):
     settle_operating_mode(state)
     advance_entity_components(state["own"])
     for actor in state["actors"]:
-        move(actor, TICK)
+        if not actor.get("casualty"):
+            move(actor, TICK)
         advance_entity_components(actor)
     if active:
         report(state, "Sonar", "One active acoustic transmission made.", "emission")
@@ -989,6 +1301,8 @@ def tick_world(state, dice, order, first_tick):
             )
     elif order["activity"] in ("receive", "transmit", "retrieve"):
         apply_communications(state, dice, order, achieved)
+    elif order["activity"] == "employ":
+        apply_employment(state, dice, order, achieved)
     if order["activity"] == "repair":
         if state["pump_fault"]:
             if achieved["repair_minutes"] < TICK:
@@ -1032,8 +1346,69 @@ def require(order, field):
         )
 
 
+def _require_basis(order, state):
+    require(order, "basis")
+    known = {entry["id"] for entry in state["reports"]}
+    if (
+        not isinstance(order["basis"], list)
+        or any(not isinstance(item, str) or item not in known for item in order["basis"])
+    ):
+        raise ValueError("Basis must list existing report ids only.")
+
+
+def _validate_employment(order, state):
+    """Reject a launch before any inventory change or elapsed time."""
+    require(order, "weapon")
+    require(order, "target")
+    _require_basis(order, state)
+    if not isinstance(order["weapon"], str) or not isinstance(order["target"], str):
+        raise ValueError("weapon and target must be strings. No time has elapsed.")
+    if state["own"].get("casualty"):
+        raise ValueError("A mobility casualty prevents employment. No time has elapsed.")
+    spec = entity_spec(state["own"])
+    try:
+        rule = spec.employment(order["weapon"])
+    except ValueError as error:
+        raise ValueError(
+            f"{order['weapon']} has no employment rule on this platform. "
+            "No time has elapsed."
+        ) from error
+    if not rule.allows(order["depth"], order["speed"]):
+        raise ValueError(
+            f"{rule.identifier} envelope: {rule.minimum_depth_feet:g} to "
+            f"{rule.maximum_depth_feet:g} feet and at most "
+            f"{rule.maximum_speed_knots:g} knots. No time has elapsed."
+        )
+    held = state["own"]["inventory"].get(rule.identifier, 0)
+    if held < 1:
+        raise ValueError(
+            f"No {rule.identifier} remains in inventory. No time has elapsed."
+        )
+    authorization = state["authorization"]
+    if rule.kind.value == "offensive" and not authorization["offensive_weapons"]:
+        raise ValueError(
+            "Offensive employment is not authorized. Inventory and the launcher "
+            "are unchanged. No time has elapsed."
+        )
+    if rule.kind.value == "countermeasure" and not authorization["countermeasures"]:
+        raise ValueError(
+            "Countermeasure employment is not authorized. Inventory is unchanged. "
+            "No time has elapsed."
+        )
+    if rule.kind.value == "offensive":
+        if order["target"] not in {track["id"] for track in state["tracks"]}:
+            raise ValueError(
+                "Offensive employment requires an existing contact id. "
+                "No time has elapsed."
+            )
+    elif order["target"] != "none":
+        raise ValueError(
+            "Countermeasure employment requires target none. No time has elapsed."
+        )
+
+
 def validate_order(raw, state):
-    allowed = {"id", "minutes", "course", "speed", "depth", "operating_mode", "activity", "focus", "link", "assessment", "message", "basis", "interrupt_on", "expected_turn"}
+    allowed = {"id", "minutes", "course", "speed", "depth", "operating_mode", "activity", "focus", "link", "assessment", "message", "basis", "weapon", "target", "interrupt_on", "expected_turn"}
     if not isinstance(raw, dict) or set(raw) - allowed:
         raise ValueError("Order must be an object using only the documented fields.")
     if not isinstance(raw.get("id"), str) or not 1 <= len(raw["id"]) <= 80:
@@ -1044,7 +1419,7 @@ def validate_order(raw, state):
     # lineup, duration or interrupt policy that the captain did not state.
     require(order, "activity")
     activity = order["activity"]
-    if activity not in ("listen", "focus", "active", "mast", "receive", "transmit", "retrieve", "repair", "end"):
+    if activity not in ("listen", "focus", "active", "mast", "receive", "transmit", "retrieve", "repair", "employ", "end"):
         raise ValueError("Unsupported activity. No time has elapsed; agree on an applicable rule before proceeding.")
     if activity == "end":
         if set(raw) - {"id", "activity", "expected_turn"}:
@@ -1146,15 +1521,20 @@ def validate_order(raw, state):
             raise ValueError("Transmission requires assessment: submerged_present, surface_or_biologic, or unresolved.")
         if not isinstance(order["message"], str) or not 1 <= len(order["message"]) <= 4000:
             raise ValueError("Transmission requires a message of 1 to 4000 characters.")
-        require(order, "basis")
-        if not isinstance(order["basis"], list) or any(not isinstance(r, str) or r not in [p["id"] for p in state["reports"]] for r in order["basis"]):
-            raise ValueError("Basis must list existing report ids only.")
-    elif {"assessment", "message", "basis"} & set(raw):
-        raise ValueError("Assessment, message and basis fields require transmit activity.")
+        _require_basis(order, state)
+    elif {"assessment", "message"} & set(raw):
+        raise ValueError("Assessment and message fields require transmit activity.")
+    if activity == "employ":
+        _validate_employment(order, state)
+    elif {"weapon", "target"} & set(raw) or ("basis" in raw and activity != "transmit"):
+        raise ValueError(
+            "weapon and target belong on an employ order. basis belongs on a "
+            "transmit or employ order. No time has elapsed."
+        )
     require(order, "interrupt_on")
     valid_interrupts = {"new_contact", "classification_change", "equipment", "deadline", "contact_lost",
                         "message_received", "radio_failure", "maneuver_complete", "activity_deferred",
-                        "antenna_deployed", "operating_mode"}
+                        "antenna_deployed", "operating_mode", "incoming_weapon"}
     if not isinstance(order["interrupt_on"], list) or any(x not in valid_interrupts for x in order["interrupt_on"]):
         raise ValueError("Unknown interrupt condition.")
     return order
@@ -1194,7 +1574,7 @@ def simulate(state, seed, order):
             break
         completed = categories.intersection(
             {"transmission_complete", "message_received", "radio_empty", "repair_complete",
-             "retrieval_complete"}
+             "retrieval_complete", "weapon_resolved"}
         )
         if completed:
             stop = "task_complete"
@@ -1251,6 +1631,7 @@ def capability_report():
             "numeric narrowband spectra with measured frequency and uncertainty",
             "consumable resource advancement",
             "persistent equipment and inventory states",
+            "weapon and countermeasure employment",
         ],
         "scenario_selection": (
             "Opposing entity specifications remain hidden until supported "
@@ -1295,12 +1676,21 @@ def public_view(game):
                          "equipment_states": copy.deepcopy(own["equipment"]),
                          "antennas": public_antennas(state),
                          "inventory": copy.deepcopy(own["inventory"]),
+                         "authorization": copy.deepcopy(state["authorization"]),
                          "restrictions": {
-                             "exercise": "Observation-only patrol.",
-                             "rules_of_engagement": "No offensive weapons employment authorized.",
-                             "employment_available": False,
+                             "exercise": "Ceasefire verification patrol.",
+                             "rules_of_engagement": (
+                                 "No offensive weapons employment is authorized. "
+                                 "Countermeasures may be used."
+                             ),
                          },
-                         "equipment": "Auxiliary vibration; sonar self-noise elevated" if state["pump_fault"] else "All systems available",
+                         "equipment": (
+                             "Mobility casualty; ordered maneuvers are not achieved."
+                             if own.get("casualty") else
+                             "Auxiliary vibration; sonar self-noise elevated"
+                             if state["pump_fault"] else
+                             "All systems available"
+                         ),
                          "repair_minutes_completed": state["repair_progress"]},
             "navigation": {"relief_distance_nm": round(gap, 2), "relief_bearing_true": round(bearing(own, station)),
                            "minutes_to_relief": remaining,
@@ -1401,6 +1791,60 @@ def fsync_directory(path):
         os.close(descriptor)
 
 
+def _adjudication(game):
+    """Separate the order's evidence, the random draw and the engine check."""
+    quality = []
+    evidence = []
+    engagements = game["state"]["engagements"]
+    for event in game["events"]:
+        order = event["order"]
+        if order.get("activity") != "employ":
+            continue
+        match = next(
+            (item for item in engagements if item.get("order_id") == order["id"]),
+            None,
+        )
+        basis = list(order.get("basis", []))
+        contact_reports = [] if match is None else list(match.get("contact_report_ids", []))
+        if order["target"] == "none":
+            judgment = "countermeasure_deployment"
+        elif basis:
+            judgment = "cited_contact_evidence"
+        else:
+            judgment = "no_report_cited"
+        quality.append({
+            "order_id": order["id"],
+            "weapon": order["weapon"],
+            "target": order["target"],
+            "cited_report_count": len(basis),
+            "aim_used_measured_range": None if match is None else match.get("aim_used_measured_range"),
+            "judgment": judgment,
+            "standard": "Judged from the order and the reports named in it.",
+        })
+        evidence.append({
+            "order_id": order["id"],
+            "basis": basis,
+            "contact_report_ids": contact_reports,
+        })
+    luck = [
+        {
+            "elapsed_minutes": item["elapsed_minutes"],
+            "draw_label": item["draw_label"],
+            "probability": item["probability"],
+            "draw": item["draw"],
+            "outcome": item["outcome"],
+        }
+        for item in engagements
+        if item.get("draw") is not None
+    ]
+    return {
+        "decision_quality": quality,
+        "observed_evidence": evidence,
+        "luck": luck,
+        "engine_errors": [],
+    }
+
+
 def debrief(game):
     if not game["state"]["ended"]:
         raise ValueError("Debrief is unavailable during play. End the exercise explicitly to reveal it.")
@@ -1419,11 +1863,29 @@ def debrief(game):
             "emitter_spectra": [
                 {"id": entity["id"], **spectra.truth_snapshot(entity)} for entity in emitters
             ],
+            "adjudication": _adjudication(game),
             "outcomes": {"assessment_sent_by_deadline": bool(timely),
                          "at_relief_at_0800": distance(state["own"], {"x": 24, "y": 0}) <= 3 if state["t"] == END else None,
                          "opponent_detected_own_ship": any(a["aware"] for a in state["actors"]),
                          "radio_intercepts": copy.deepcopy(state["radio_intercepts"]),
-                         "assessments": evaluations}}
+                         "assessments": evaluations,
+                         "casualties": [
+                             {"id": entity["id"], **copy.deepcopy(entity["casualty"])}
+                             for entity in (state["own"], *state["actors"])
+                             if entity.get("casualty")
+                         ],
+                         "engagements": copy.deepcopy(state["engagements"]),
+                         "opposition": [
+                             {
+                                 "id": actor["id"],
+                                 "doctrine": actor.get("doctrine"),
+                                 "intent": actor.get("intent"),
+                                 "belief": copy.deepcopy(actor.get("belief")),
+                                 "observation_count": len(actor.get("observations", [])),
+                                 "casualty": copy.deepcopy(actor.get("casualty")),
+                             }
+                             for actor in state["actors"]
+                         ]}}
 
 
 def main():

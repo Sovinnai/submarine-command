@@ -270,6 +270,20 @@ class Equipment:
         }
 
 
+class EmploymentKind(str, Enum):
+    OFFENSIVE = "offensive"
+    COUNTERMEASURE = "countermeasure"
+
+
+class EmploymentEffect(str, Enum):
+    MOBILITY_CASUALTY = "mobility_casualty"
+    SEDUCE = "seduce"
+    MASK = "mask"
+
+
+OPPONENT_FIRE_MEMORY_MINUTES = 15
+
+
 @dataclass(frozen=True)
 class InventoryItem:
     identifier: str
@@ -283,6 +297,75 @@ class InventoryItem:
             "description": self.description,
             "quantity": self.quantity,
             "employment_implemented": self.employment_implemented,
+        }
+
+
+@dataclass(frozen=True)
+class EmploymentRule:
+    """Fictional launch and effect rule for one inventory item.
+
+    Quantity lives on the inventory. Whether a patrol allows the launch lives
+    on that patrol's authorization. This rule is only the physical employment
+    model: envelope, time, range and the effect a completed launch can have.
+    """
+
+    identifier: str
+    kind: EmploymentKind
+    effect: EmploymentEffect
+    cycle_minutes: int
+    minimum_depth_feet: float
+    maximum_depth_feet: float
+    maximum_speed_knots: float
+    minimum_range_nm: float
+    maximum_range_nm: float
+    base_probability: float
+    range_bonus: float
+    lethal_radius_nm: float
+    effect_minutes: int
+    launch_distance_nm: float = 0.0
+    seduce_probability: float = 0.0
+    mask_penalty: float = 0.0
+
+    def allows(self, depth_feet, speed_knots):
+        return (
+            self.minimum_depth_feet <= depth_feet <= self.maximum_depth_feet
+            and 0 <= speed_knots <= self.maximum_speed_knots
+        )
+
+    def public_definition(self):
+        return {
+            "id": self.identifier,
+            "employment": self.kind.value,
+            "effect": self.effect.value,
+            "cycle_minutes": self.cycle_minutes,
+            "envelope": {
+                "minimum_depth_feet": self.minimum_depth_feet,
+                "maximum_depth_feet": self.maximum_depth_feet,
+                "maximum_speed_knots": self.maximum_speed_knots,
+            },
+            "range_nm": {
+                "minimum": self.minimum_range_nm,
+                "maximum": self.maximum_range_nm,
+            },
+            "base_probability": self.base_probability,
+            "range_bonus": self.range_bonus,
+            "probability_cap": 0.92,
+            "lethal_radius_nm": self.lethal_radius_nm,
+            "effect_minutes": self.effect_minutes,
+            "launch_distance_nm": self.launch_distance_nm,
+            "seduce_probability": self.seduce_probability,
+            "mask_penalty": self.mask_penalty,
+            "resolution": (
+                "A completed launch expends one unit. An offensive round is aimed "
+                "with the shooter's own evidence. Hit probability is 0 when the "
+                "true position is outside lethal_radius_nm of that aimpoint or "
+                "outside the range band. Inside both, probability is "
+                "base_probability plus range_bonus times the fraction of the band "
+                "remaining, then reduced by an active mask penalty, and capped at "
+                "0.92. One draw named by shooter, weapon, target and time decides "
+                "the result. A mask or decoy deployment has no hit draw; a later "
+                "seeker draw uses seduce_probability."
+            ),
         }
 
 
@@ -301,6 +384,7 @@ class EntitySpec:
     communication_modes: tuple[CommunicationMode, ...] = ()
     weapons: tuple[InventoryItem, ...] = ()
     countermeasures: tuple[InventoryItem, ...] = ()
+    employment_rules: tuple[EmploymentRule, ...] = ()
     resources: tuple[ResourceModel, ...] = ()
     mast: MastEnvelope | None = None
     repair_maximum_speed_knots: float | None = None
@@ -325,6 +409,24 @@ class EntitySpec:
             raise ValueError(
                 f"{identifier!r} is not a communications mode for {self.class_name}."
             ) from error
+
+    def employment(self, identifier):
+        try:
+            return next(
+                rule for rule in self.employment_rules
+                if rule.identifier == identifier
+            )
+        except StopIteration as error:
+            raise ValueError(
+                f"{identifier!r} has no employment rule on {self.class_name}."
+            ) from error
+
+    def _published_inventory(self, item):
+        published = item.public_definition()
+        published["employment_implemented"] = any(
+            rule.identifier == item.identifier for rule in self.employment_rules
+        )
+        return published
 
     def initial_components(self):
         return {
@@ -362,10 +464,13 @@ class EntitySpec:
                 mode.public_definition() for mode in self.communication_modes
             ],
             "weapons_inventory": [
-                item.public_definition() for item in self.weapons
+                self._published_inventory(item) for item in self.weapons
             ],
             "countermeasure_inventory": [
-                item.public_definition() for item in self.countermeasures
+                self._published_inventory(item) for item in self.countermeasures
+            ],
+            "employment_rules": [
+                rule.public_definition() for rule in self.employment_rules
             ],
             "behavior_model": self.behavior_model,
         }
@@ -396,17 +501,30 @@ class EntitySpec:
                 "environment": capability_environment(),
                 "weapons": {
                     "loadout_modeled": True,
-                    "employment_modeled": False,
-                    "exercise_restriction": (
-                        "Observation-only patrol; weapon and countermeasure "
-                        "employment is unavailable."
+                    "employment_modeled": bool(self.employment_rules),
+                    "authorization_note": (
+                        "Inventory quantity, this employment rule and the patrol "
+                        "authorization are checked separately. A launch also "
+                        "requires the order the captain actually gave."
                     ),
+                    "own_ship_source_level_change": False,
                     "inventory": [
-                        item.public_definition() for item in self.weapons
+                        self._published_inventory(item) for item in self.weapons
                     ],
                     "countermeasures": [
-                        item.public_definition() for item in self.countermeasures
+                        self._published_inventory(item)
+                        for item in self.countermeasures
                     ],
+                    "employment_rules": [
+                        rule.public_definition() for rule in self.employment_rules
+                    ],
+                    "opponent_weapon_memory_minutes": OPPONENT_FIRE_MEMORY_MINUTES,
+                    "opponent_employment": (
+                        "An opposing unit fires only under an engage doctrine, "
+                        "using its own detection record. Passage and avoid "
+                        "doctrines do not fire. No new unit is created after a "
+                        "hit or a miss."
+                    ),
                 },
                 "measurements": {
                     "bearing_history": True,
@@ -588,12 +706,65 @@ KESTREL = EntitySpec(
     ),
     weapons=(
         InventoryItem(
-            "exercise_heavyweight", "Fictional exercise heavyweight round.", 10
+            "exercise_heavyweight",
+            "Fictional exercise heavyweight round.",
+            10,
+            True,
         ),
     ),
     countermeasures=(
-        InventoryItem("mobile_decoy", "Fictional mobile acoustic decoy.", 6),
-        InventoryItem("noise_maker", "Fictional expendable noise maker.", 12),
+        InventoryItem("mobile_decoy", "Fictional mobile acoustic decoy.", 6, True),
+        InventoryItem("noise_maker", "Fictional expendable noise maker.", 12, True),
+    ),
+    employment_rules=(
+        EmploymentRule(
+            identifier="exercise_heavyweight",
+            kind=EmploymentKind.OFFENSIVE,
+            effect=EmploymentEffect.MOBILITY_CASUALTY,
+            cycle_minutes=5,
+            minimum_depth_feet=150,
+            maximum_depth_feet=250,
+            maximum_speed_knots=10,
+            minimum_range_nm=0.5,
+            maximum_range_nm=6.0,
+            base_probability=0.50,
+            range_bonus=0.40,
+            lethal_radius_nm=0.40,
+            effect_minutes=0,
+        ),
+        EmploymentRule(
+            identifier="mobile_decoy",
+            kind=EmploymentKind.COUNTERMEASURE,
+            effect=EmploymentEffect.SEDUCE,
+            cycle_minutes=5,
+            minimum_depth_feet=100,
+            maximum_depth_feet=800,
+            maximum_speed_knots=12,
+            minimum_range_nm=0.0,
+            maximum_range_nm=0.0,
+            base_probability=0.0,
+            range_bonus=0.0,
+            lethal_radius_nm=0.0,
+            effect_minutes=15,
+            launch_distance_nm=1.5,
+            seduce_probability=0.70,
+        ),
+        EmploymentRule(
+            identifier="noise_maker",
+            kind=EmploymentKind.COUNTERMEASURE,
+            effect=EmploymentEffect.MASK,
+            cycle_minutes=5,
+            minimum_depth_feet=100,
+            maximum_depth_feet=800,
+            maximum_speed_knots=12,
+            minimum_range_nm=0.0,
+            maximum_range_nm=0.0,
+            base_probability=0.0,
+            range_bonus=0.0,
+            lethal_radius_nm=0.0,
+            effect_minutes=10,
+            mask_penalty=0.45,
+        ),
     ),
     mast=_KESTREL_MAST,
     repair_maximum_speed_knots=10,
@@ -638,7 +809,26 @@ DART = EntitySpec(
         Equipment("radio_mast", "Retractable mast radio.", "stowed", None),
     ),
     weapons=(
-        InventoryItem("diesel_heavyweight", "Fictional heavyweight round.", 8),
+        InventoryItem(
+            "diesel_heavyweight", "Fictional heavyweight round.", 8, True
+        ),
+    ),
+    employment_rules=(
+        EmploymentRule(
+            identifier="diesel_heavyweight",
+            kind=EmploymentKind.OFFENSIVE,
+            effect=EmploymentEffect.MOBILITY_CASUALTY,
+            cycle_minutes=10,
+            minimum_depth_feet=40,
+            maximum_depth_feet=600,
+            maximum_speed_knots=10,
+            minimum_range_nm=0.5,
+            maximum_range_nm=5.0,
+            base_probability=0.45,
+            range_bonus=0.40,
+            lethal_radius_nm=0.35,
+            effect_minutes=0,
+        ),
     ),
     countermeasures=(
         InventoryItem("compact_decoy", "Fictional compact acoustic decoy.", 6),
@@ -702,8 +892,27 @@ WARSHIP = EntitySpec(
         Equipment("military_radio", "Military line-of-sight radio.", "available", None),
     ),
     weapons=(
-        InventoryItem("lightweight_round", "Fictional lightweight acoustic round.", 8),
+        InventoryItem(
+            "lightweight_round", "Fictional lightweight acoustic round.", 8, True
+        ),
         InventoryItem("guided_round", "Fictional guided surface round.", 4),
+    ),
+    employment_rules=(
+        EmploymentRule(
+            identifier="lightweight_round",
+            kind=EmploymentKind.OFFENSIVE,
+            effect=EmploymentEffect.MOBILITY_CASUALTY,
+            cycle_minutes=10,
+            minimum_depth_feet=0,
+            maximum_depth_feet=0,
+            maximum_speed_knots=20,
+            minimum_range_nm=0.4,
+            maximum_range_nm=5.0,
+            base_probability=0.40,
+            range_bonus=0.45,
+            lethal_radius_nm=0.30,
+            effect_minutes=0,
+        ),
     ),
     countermeasures=(
         InventoryItem("surface_decoy", "Fictional surface acoustic decoy.", 8),
