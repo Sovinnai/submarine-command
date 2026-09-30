@@ -75,7 +75,7 @@ retains shell access under the same account remains policy-only isolation.
   depend on bow, beam, or stern aspect.
 - A short nuclear patrol with no modeled reactor endurance constraint; diesel
   battery and snorkeling tradeoffs use explicit fictional rates.
-- A single auxiliary fault and a small weapon model: one mobility casualty, a decoy and a noise maker. Opponents fire only under an engage doctrine, using their own detection record.
+- A single auxiliary fault and a small weapon model: a homing run that can destroy, disable, or dud from where the round is, plus a decoy and a noise maker. Opponents fire only under an engage doctrine, using their own detection record. Patrol authorization asks for confirmation and does not block a confirmed launch.
 - Mast-transmission exposure is a published range check on the shared
   radio-window draw against surface combatants. It is not a separate propagation
   model, and it does not change own-ship acoustic source level.

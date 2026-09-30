@@ -99,10 +99,12 @@ supplies no default for any of them: an order missing `course`, `speed`,
 `expected_turn` is rejected before anything changes, rather than being filled in
 from the current settings. `receive`, `transmit` and `retrieve` also require
 `link`, naming one published mode such as `mast_receive`, `mast_transmit` or
-`buoyant_receive`. `employ` also requires `weapon`, `target` and `basis`.
+`buoyant_receive`. `employ` also requires `weapon`, `target`, `basis` and `confirm`.
 `weapon` names a published inventory item, `target` is an existing contact id
 for an offensive round or `none` for a countermeasure, and `basis` lists
-existing report ids. An empty `interrupt_on` means no interrupt was
+existing report ids. `confirm` false is fire control asking for confirmation
+and does not launch. `confirm` true launches, including when the patrol orders
+do not authorize that weapon. A launched round then runs on later steps. An empty `interrupt_on` means no interrupt was
 selected, and an empty `basis` means the assessment cites no report. An `end`
 order takes only `id`, `expected_turn` and `activity`. Mode-specific and
 platform-wide envelopes are both validated. Orders run for 5–60 minutes in
@@ -190,7 +192,7 @@ verification. During active play, debrief refuses to reveal anything.
 | Communications | Separate mast receive, mast transmit and buoyant receive modes; antenna state, latency, retrieval and a shared radio window |
 | Opposition | Each unit keeps its own detections, belief and doctrine. Avoid turns away from its fix. Engage may shoot at that fix. Passage does neither |
 | Resources | Diesel battery use and snorkeling recharge, vessel fuel consumption, and persistent inventories advance on the shared clock |
-| Weapons | Fictional loadout, employment rules and patrol authorization are separate checks. A hit records one mobility casualty. A miss adds no new unit |
+| Weapons | A confirmed launch puts a homing round in the water. Later steps score destruction, a mobility casualty, or a dud from the round's location. Fire control asks when patrol orders do not authorize the shot |
 | Engineering | An auxiliary-noise fault and timed repair |
 | Narrator interface | Restricted local JSON-lines broker with opaque sessions and public-only operations |
 

@@ -74,7 +74,7 @@ supplies no default, so a missing `activity`, `minutes`, `course`, `speed`,
 `depth`, `operating_mode`, `interrupt_on` or `expected_turn` is rejected before
 state mutation rather than filled in from the current settings. Receive,
 transmit and retrieve also require `link`, naming a published communications
-mode. An `employ` order also names `weapon`, `target` and `basis`. The narrator must therefore read `own_ship` and restate the settings it
+mode. An `employ` order also names `weapon`, `target`, `basis` and `confirm`. The narrator must therefore read `own_ship` and restate the settings it
 intends to keep. Because a maneuver takes simulated time, `own_ship.maneuver`
 reports the commanded value beside the achieved one: restate the commanded
 value to continue a maneuver in progress, not the achieved value, which would

@@ -276,7 +276,7 @@ class EmploymentKind(str, Enum):
 
 
 class EmploymentEffect(str, Enum):
-    MOBILITY_CASUALTY = "mobility_casualty"
+    HOMING_RUN = "homing_run"
     SEDUCE = "seduce"
     MASK = "mask"
 
@@ -302,11 +302,12 @@ class InventoryItem:
 
 @dataclass(frozen=True)
 class EmploymentRule:
-    """Fictional launch and effect rule for one inventory item.
+    """Fictional launch and run rule for one inventory item.
 
-    Quantity lives on the inventory. Whether a patrol allows the launch lives
-    on that patrol's authorization. This rule is only the physical employment
-    model: envelope, time, range and the effect a completed launch can have.
+    Quantity lives on the inventory. Patrol authorization is what fire control
+    reads back to the captain; a confirmed order can still launch. This rule is
+    the physical model: the launch envelope, and for a homing run the speed,
+    seeker and the chances that depend on where the round is.
     """
 
     identifier: str
@@ -325,6 +326,12 @@ class EmploymentRule:
     launch_distance_nm: float = 0.0
     seduce_probability: float = 0.0
     mask_penalty: float = 0.0
+    run_speed_knots: float = 0.0
+    seeker_range_nm: float = 0.0
+    destruction_radius_nm: float = 0.0
+    destruction_probability: float = 0.0
+    mobility_probability: float = 0.0
+    dud_probability: float = 0.0
 
     def allows(self, depth_feet, speed_knots):
         return (
@@ -355,16 +362,30 @@ class EmploymentRule:
             "launch_distance_nm": self.launch_distance_nm,
             "seduce_probability": self.seduce_probability,
             "mask_penalty": self.mask_penalty,
+            "run_speed_knots": self.run_speed_knots,
+            "seeker_range_nm": self.seeker_range_nm,
+            "destruction_radius_nm": self.destruction_radius_nm,
+            "destruction_probability": self.destruction_probability,
+            "mobility_probability": self.mobility_probability,
+            "dud_probability": self.dud_probability,
+            "possible_effects": (
+                ["destroyed", "mobility_casualty", "dud"]
+                if self.effect == EmploymentEffect.HOMING_RUN
+                else [self.effect.value]
+            ),
             "resolution": (
-                "A completed launch expends one unit. An offensive round is aimed "
-                "with the shooter's own evidence. Hit probability is 0 when the "
-                "true position is outside lethal_radius_nm of that aimpoint or "
-                "outside the range band. Inside both, probability is "
-                "base_probability plus range_bonus times the fraction of the band "
-                "remaining, then reduced by an active mask penalty, and capped at "
-                "0.92. One draw named by shooter, weapon, target and time decides "
-                "the result. A mask or decoy deployment has no hit draw; a later "
-                "seeker draw uses seduce_probability."
+                "A completed launch expends one unit and puts the round in the "
+                "water. It runs at run_speed_knots out to maximum_range_nm, "
+                "steering toward a contact inside seeker_range_nm, or toward a "
+                "decoy when that seeker draw succeeds. It cannot arm inside "
+                "minimum_range_nm of the launcher. Once armed, each minute uses "
+                "the closest approach during that minute. Outside "
+                "lethal_radius_nm there is no draw. Inside it, one draw compares "
+                "with the destruction, mobility and dud chances for that "
+                "distance. Destruction requires destruction_radius_nm. An active "
+                "mask multiplies those chances by one minus mask_penalty. The "
+                "chances together are capped at 0.92. A miss or an end of run "
+                "adds no unit."
             ),
         }
 
@@ -503,9 +524,11 @@ class EntitySpec:
                     "loadout_modeled": True,
                     "employment_modeled": bool(self.employment_rules),
                     "authorization_note": (
-                        "Inventory quantity, this employment rule and the patrol "
-                        "authorization are checked separately. A launch also "
-                        "requires the order the captain actually gave."
+                        "Inventory and this employment rule decide whether a "
+                        "launch is physically possible. Patrol authorization is "
+                        "what fire control reads back. confirm false asks for "
+                        "confirmation and does not launch. confirm true launches, "
+                        "including when the patrol orders do not authorize it."
                     ),
                     "own_ship_source_level_change": False,
                     "inventory": [
@@ -720,17 +743,23 @@ KESTREL = EntitySpec(
         EmploymentRule(
             identifier="exercise_heavyweight",
             kind=EmploymentKind.OFFENSIVE,
-            effect=EmploymentEffect.MOBILITY_CASUALTY,
+            effect=EmploymentEffect.HOMING_RUN,
             cycle_minutes=5,
             minimum_depth_feet=150,
             maximum_depth_feet=250,
             maximum_speed_knots=10,
             minimum_range_nm=0.5,
             maximum_range_nm=6.0,
-            base_probability=0.50,
-            range_bonus=0.40,
-            lethal_radius_nm=0.40,
+            base_probability=0.0,
+            range_bonus=0.0,
+            lethal_radius_nm=0.50,
             effect_minutes=0,
+            run_speed_knots=36,
+            seeker_range_nm=1.2,
+            destruction_radius_nm=0.15,
+            destruction_probability=0.75,
+            mobility_probability=0.40,
+            dud_probability=0.08,
         ),
         EmploymentRule(
             identifier="mobile_decoy",
@@ -817,17 +846,23 @@ DART = EntitySpec(
         EmploymentRule(
             identifier="diesel_heavyweight",
             kind=EmploymentKind.OFFENSIVE,
-            effect=EmploymentEffect.MOBILITY_CASUALTY,
+            effect=EmploymentEffect.HOMING_RUN,
             cycle_minutes=10,
             minimum_depth_feet=40,
             maximum_depth_feet=600,
             maximum_speed_knots=10,
             minimum_range_nm=0.5,
             maximum_range_nm=5.0,
-            base_probability=0.45,
-            range_bonus=0.40,
-            lethal_radius_nm=0.35,
+            base_probability=0.0,
+            range_bonus=0.0,
+            lethal_radius_nm=0.40,
             effect_minutes=0,
+            run_speed_knots=32,
+            seeker_range_nm=1.0,
+            destruction_radius_nm=0.12,
+            destruction_probability=0.70,
+            mobility_probability=0.50,
+            dud_probability=0.08,
         ),
     ),
     countermeasures=(
@@ -901,17 +936,23 @@ WARSHIP = EntitySpec(
         EmploymentRule(
             identifier="lightweight_round",
             kind=EmploymentKind.OFFENSIVE,
-            effect=EmploymentEffect.MOBILITY_CASUALTY,
+            effect=EmploymentEffect.HOMING_RUN,
             cycle_minutes=10,
             minimum_depth_feet=0,
             maximum_depth_feet=0,
             maximum_speed_knots=20,
             minimum_range_nm=0.4,
             maximum_range_nm=5.0,
-            base_probability=0.40,
-            range_bonus=0.45,
-            lethal_radius_nm=0.30,
+            base_probability=0.0,
+            range_bonus=0.0,
+            lethal_radius_nm=0.35,
             effect_minutes=0,
+            run_speed_knots=40,
+            seeker_range_nm=1.0,
+            destruction_radius_nm=0.10,
+            destruction_probability=0.65,
+            mobility_probability=0.45,
+            dud_probability=0.08,
         ),
     ),
     countermeasures=(
