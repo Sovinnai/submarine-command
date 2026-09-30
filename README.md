@@ -13,7 +13,9 @@ causes and the captain's decisions must change the world consistently.
 **Status: early prototype, version 0.13.** The hidden-state and replay foundation
 works. Acoustic transmission uses a documented sound-speed profile and path
 approximations. Contact reports include measured narrowband frequencies, line
-quality and uncertainty. Array geometry is still simplified.
+quality and uncertainty. Own-ship reception uses separate hull, flank and towed
+receivers with baffles and a modeled towed-array deployment state. Towed-array
+cable shape is not calculated.
 Unsupported systems are explicitly identified in the capability report.
 
 ## Run it
@@ -93,7 +95,7 @@ python -m submarine_command --session .sessions/my-patrol verify
 ```
 
 Supported activities are `listen`, `focus`, `active`, `mast`, `receive`,
-`transmit`, `retrieve`, `repair`, `employ`, and `end`. **Every field must be stated.** The engine
+`transmit`, `retrieve`, `stream_array`, `recover_array`, `repair`, `employ`, and `end`. **Every field must be stated.** The engine
 supplies no default for any of them: an order missing `course`, `speed`,
 `depth`, `operating_mode`, `minutes`, `activity`, `interrupt_on` or
 `expected_turn` is rejected before anything changes, rather than being filled in
@@ -158,6 +160,19 @@ source level. `own_ship.antennas` shows deployment state and progress.
 Repair requires 20 productive minutes at 10 knots or less, counting only the
 minutes actually spent at or below that speed, persists across command windows,
 and is concurrent with movement and observation.
+
+`stream_array` needs 15 productive minutes at 8 knots or less; `recover_array`
+needs 10. Only minutes actually spent at or below that speed count, including a
+step spent decelerating. Hull and flank still listen during those activities;
+recovery marks the towed receiver recovering before that step's listening. While
+the towed array is streaming, streamed, or recovering, later orders may not
+exceed the published speed for that state. A turn, or the five minutes after
+one, marks the towed receiver unstable through the settling step, including a
+turn on the step that finishes streaming, instead of calculating cable shape. Each listening receiver writes its own contact history;
+a similar bearing on another receiver is not automatically the same contact. A
+visual sighting is a separate history. Focused analysis requires an acoustic
+receiver history. `own_ship.sonar_receivers` and
+`own_ship.towed_array` show the published depths, coverage and deployment.
 The public `command_contract` reports these rules in machine-readable form.
 
 A transmission requires `assessment` (`submerged_present`,
@@ -184,7 +199,7 @@ verification. During active play, debrief refuses to reveal anything.
 | Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |
 | Maneuver | Ordered course, speed, depth and mode resolved over simulated time at published turn, acceleration and speed-proportional depth rates; achieved and ordered reported separately |
-| Sonar | Generic passive reception, focused analysis, active range measurement, and numeric narrowband frequencies with quality and uncertainty |
+| Sonar | Hull, flank and towed receivers with baffles, frequency response, self-noise, towed deployment state, focused analysis, active range on the hull receiver, and numeric narrowband frequencies with quality, uncertainty and error-source provenance |
 | Observations | Noisy bearings, timestamped own positions, measured bearing drift, and a separate constant-motion solution family |
 | Classification | Overlapping spectral features tied to measured lines, cited reports, and two priors |
 | Frequency change | Crew indication from successive frequencies after own-ship Doppler is removed; aspect does not change level |
