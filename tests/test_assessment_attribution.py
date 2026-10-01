@@ -1,6 +1,5 @@
 """Mission assessments attribute debrief accuracy to cited contacts."""
 
-import json
 import unittest
 
 from submarine_command import engine as e
@@ -24,8 +23,8 @@ class AssessmentAttributionTests(unittest.TestCase):
             "minutes": 15,
             "interrupt_on": [],
             "course": own["course"],
-            "speed": own["speed"],
-            "depth": own["depth"],
+            "speed": kwargs.pop("speed", 5),
+            "depth": kwargs.pop("depth", 70),
             "operating_mode": own["operating_mode"],
             **kwargs,
         }
@@ -40,20 +39,26 @@ class AssessmentAttributionTests(unittest.TestCase):
                 return entry["id"]
         self.fail(f"No report cites contact {contact_id}")
 
+    def assert_public_hides_actors(self, view):
+        def scan(obj):
+            if isinstance(obj, dict):
+                self.assertNotIn("actor", obj)
+                self.assertNotIn("actors", obj)
+                for value in obj.values():
+                    scan(value)
+            elif isinstance(obj, list):
+                for value in obj:
+                    scan(value)
+
+        scan(view)
+
     def transmit(self, assessment, basis, order_id="send"):
-        self.game["state"]["own"]["depth"] = 70.0
-        self.game["state"]["own"]["speed"] = 5.0
-        self.game["state"]["ordered"]["depth"] = 70.0
-        self.game["state"]["ordered"]["speed"] = 5.0
-        self.game["state"]["radio_reliability"] = 2
         result = e.apply_order(
             self.game,
             self.order(
                 id=order_id,
                 activity="transmit",
                 link="mast_transmit",
-                depth=70,
-                speed=5,
                 minutes=5,
                 assessment=assessment,
                 message=f"Assessment {assessment}",
@@ -90,7 +95,7 @@ class AssessmentAttributionTests(unittest.TestCase):
         public = self.transmit("submerged_present", [surface_report])
         sent = public["transmitted_assessments"][-1]
         self.assertEqual(sent["scope"], {"kind": "track", "contact": "S03"})
-        self.assertNotIn("actor", json.dumps(public))
+        self.assert_public_hides_actors(public)
 
         revealed = self.end_and_debrief()
         evaluation = revealed["outcomes"]["assessments"][-1]
@@ -114,19 +119,12 @@ class AssessmentAttributionTests(unittest.TestCase):
 
     def test_shore_only_basis_stays_unattributed_area_presence(self):
         self.listen_for_contacts()
-        self.game["state"]["own"]["depth"] = 70.0
-        self.game["state"]["own"]["speed"] = 5.0
-        self.game["state"]["ordered"]["depth"] = 70.0
-        self.game["state"]["ordered"]["speed"] = 5.0
-        self.game["state"]["radio_reliability"] = 2
         e.apply_order(
             self.game,
             self.order(
                 id="copy-intel",
                 activity="receive",
                 link="mast_receive",
-                depth=70,
-                speed=5,
                 minutes=5,
             ),
         )
@@ -136,10 +134,10 @@ class AssessmentAttributionTests(unittest.TestCase):
             if entry.get("category") == "message_received"
         )
         self.assertNotIn("contact", shore)
-        self.transmit("submerged_present", [shore["id"]], order_id="area-send")
-        public = e.public_view(self.game)
+        public = self.transmit("submerged_present", [shore["id"]], order_id="area-send")
         sent = public["transmitted_assessments"][-1]
         self.assertEqual(sent["scope"], {"kind": "area", "contact": None})
+        self.assert_public_hides_actors(public)
 
         evaluation = self.end_and_debrief()["outcomes"]["assessments"][-1]
         self.assertEqual(evaluation["scope"], {"kind": "area", "contact": None})
@@ -167,8 +165,6 @@ class AssessmentAttributionTests(unittest.TestCase):
                     id="mixed",
                     activity="transmit",
                     link="mast_transmit",
-                    depth=70,
-                    speed=5,
                     assessment="submerged_present",
                     message="Two tracks",
                     basis=[self.report_for("S01"), self.report_for("S03")],
