@@ -3,13 +3,14 @@
 A scenario is a public brief plus the hidden layout drawn when the session is
 created. Both published scenarios use rules version 0.12. The same order
 validation, movement, acoustic measurement, communications and replay rules
-apply. The capability report lists the public brief, clock, relief station and
-own-ship start for each scenario. It does not list the opposing draw.
+apply. The capability report lists each public brief, clock and own-ship start.
+Glass Strait also lists its relief station. Miller Line lists the barrier line.
+The report does not list the opposing draw.
 
 ```bash
 python -m submarine_command capabilities
 python -m submarine_command --session .sessions/my-patrol init
-python -m submarine_command --session .sessions/harrow-bank init --scenario harrow-bank
+python -m submarine_command --session .sessions/miller-line init --scenario miller-line
 ```
 
 The narrator `start` operation accepts the same scenario id. Omitting it starts
@@ -31,79 +32,70 @@ probability stored in the scenario module and otherwise names a different
 domain. The selection weights are those module parameters. They are not part of
 the brief.
 
-## Operation Harrow Bank
+## Operation Miller Line
 
-Fisheries surveillance on the Harrow Bank. Kestrel starts at (8 east, -6 north)
-at 0210, on course 000 at 4 knots and 400 feet, south of the bank rectangle
-x=0 to 16, y=0 to 12. The question is whether submerged traffic is on the bank.
-An evidence-based assessment is due at 0630. At 0700, Kestrel is expected within
-3 nautical miles of station SOUTHING (2 east, -12 north).
+A barrier watch, not a presence assessment and not a transit to a station.
+Kestrel starts at 0100 at (-10 east, 0 north), course 000, 5 knots, 400 feet.
+The Miller Line is the meridian x=0 from y=-18 to y=+18, ten nautical miles
+to the east. North sector is y>0. South sector is y<0. The watch ends at 0700
+wherever the boat is. Nothing in the brief assigns a relief station.
 
-SOUTHING is behind the opening position. From the start, the minimum speed that
-meets the station is low. Going north onto the bank spends the time required to
-come back south. The navigation report states the current distance and the speed
-required for the time remaining.
+The assigned result is an acoustic detection of the submerged boat at or before
+the minute it crosses the line. A surface ship crossing the line does not
+finish the watch. A detection made only after the crossing, a mast sighting,
+and a transmitted presence assessment are not that result. Kestrel may cross to
+the east side; the debrief records that it left the assigned side. Weapons
+employment is not authorized.
 
-The chart uses one water depth and one sound-speed profile everywhere. The bank
-is an operating area, not a change in bathymetry or propagation.
+The chart uses one water depth and one sound-speed profile on both sides of
+the line. The line is not a change in bathymetry or propagation.
 
 ### Hidden layout
 
-One of three layouts is drawn. The weights are the fictional parameters in
-`submarine_command/scenarios.py`. The brief does not say which layout was drawn.
+The weights and ranges are the fictional parameters in
+`submarine_command/scenarios.py`. The brief does not contain the crossing
+latitude.
 
-- A diesel submarine on the bank, two fishing vessels, an eastbound merchant
-  and a westbound surface combatant. The diesel starts on battery. Its initial
-  charge is drawn from a low band so that, at the drawn speed, the published
-  battery drain reaches the snorkeling rule before 0630. Snorkeling sets depth
-  to 50 feet, limits speed to that mode, and changes the emitted spectrum.
-  The initial course is generally north, so the boat is leaving the bank while
-  the charge runs down.
-- No submarine. A biologic group is the primary contact, with the same fishing,
-  merchant and combatant traffic.
-- No submarine and no biologic group. The primary contact is a fishing vessel,
-  with a second fishing vessel, the merchant and the combatant.
+- A diesel submarine starts east of the line, at least 6 nautical miles north
+  or south of the center, on a westbound course. If it keeps that course and
+  speed it crosses during the watch, and it crosses later than the merchant.
+  It does not snorkel on this charge. If it detects Kestrel it evades once
+  from its own fix, which can spoil the crossing.
+- A merchant starts closer to the line, in the opposite sector, and crosses
+  first. It is a real ship, not a false plot.
+- A biologic group starts near the center of the line and keeps its published
+  vocalization cycle.
+- A surface combatant patrols north or south on the east side and does not
+  cross the line. A mast transmission can be intercepted. The combatant does
+  not turn because of the intercept.
 
-The first actor is the subject of the debrief's presence score.
-`submerged_present` matches only when that actor is submerged.
-`surface_or_biologic` matches when it is not. `unresolved` is not scored as
-either. Accuracy is not a judgment of whether the cited reports supported the
-call.
-
-A 0310 shore bulletin agrees with that presence question on the same shore
-probability Glass Strait uses, and otherwise states the opposite. It does not
-name a track. A 0510 bulletin restates the deadline and the station. Both are
-dated reports, available through the published receive modes, not new sensor
-observations.
-
-The surface combatant starts more than the published 15-nautical-mile
-mast-intercept range from Kestrel's opening position, and inside that range of
-the northern bank (8 east, 6 north). It holds its initial course, so the range
-changes as it moves. An intercept is recorded. The combatant does not turn
-because of it.
+A 0120 shore plot names the north or south sector. It is right on the
+probability in the scenario module and otherwise names the opposite sector.
+The text does not give a latitude. A 0330 bulletin only restates that the
+watch ends at 0700 and that a surface crossing does not close it. Both are
+dated reports, copied through the published receive modes.
 
 ### Decisions the layout supports
 
-Staying south preserves the station and leaves the bank's quiet traffic to the
-hull and flank at opening range. Closing north, or streaming the towed array
-while closing, spends time and can raise own-ship speed. A submerged opponent
-that detects Kestrel evades from its own noisy fix; the evasion draw is then
-limited by the mode already in force. Waiting can produce a snorkeling spectrum
-on a diesel that is present, and it can also let that contact draw north while
-the station stays south. A mast look does not turn a snorkel into a visual
-surface contact. A mast transmission from the northern bank can fall inside the
-combatant's intercept range when a transmission from the opening position does
-not.
-
-Fishing vessels still change between transit and fishing. A biologic group
-still changes course, speed, depth and vocalization. Those cycles are
-alternative explanations for a changing sound. They are not identification.
+The line is longer than one quiet detection range, and the submerged crossing
+is never at the center. Staying at the center hears the middle and can miss
+the sector the boat actually uses. Sliding north or south commits the barrier
+to one sector before the crossing. The merchant provides an early, loud
+crossing in the other sector. The shore plot can agree with that ship or with
+the submarine, and it arrives only after its scheduled time plus the latency
+of the receive mode used to copy it. Streaming the towed array improves the
+listen and makes a turn along the line unstable for the published settling
+time. Going east of the line closes the range and leaves the assigned side.
+Active sonar and high speed can be heard by the crossing boat. A mast look
+does not show the deep boat.
 
 ## Debrief
 
-The debrief remains unavailable until the exercise has ended. It then reports
-whether an assessment was sent by the scenario deadline, whether Kestrel was
-inside the relief radius at the scenario end time, whether a submerged opponent
-detected Kestrel, and any recorded radio intercepts. Glass Strait also keeps
-the `at_relief_at_0800` field. Harrow Bank reports the station check as
-`at_relief_station` for SOUTHING at 0700.
+The debrief remains unavailable until the exercise has ended. Glass Strait
+reports whether an assessment was sent by the deadline, whether Kestrel was
+inside the relief radius at 0800, whether a submerged opponent detected
+Kestrel, and any recorded radio intercepts. Miller Line reports whether the
+submerged boat crossed, the crossing minute, whether an acoustic observation
+of that boat exists at or before that minute, whether the only observations
+are later, whether Kestrel went east of the line, and whether the crossing
+boat detected Kestrel.

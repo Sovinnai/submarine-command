@@ -2,14 +2,14 @@
 
 A scenario is the captain's brief plus the hidden layout drawn at
 initialization. Movement, acoustics, communications and order validation stay
-on rules version 0.12. Opposing specifications stay out of the public brief.
+on rules version 0.12. Glass Strait is a corridor assessment with a relief
+station. Miller Line is a barrier watch with no station. Opposing
+specifications stay out of the public brief.
 """
-import math
-
 from .platforms import BIOLOGIC, DART, FISHER, KESTREL, MERCHANT, WARSHIP
 
 GLASS_STRAIT = "glass-strait"
-HARROW_BANK = "harrow-bank"
+MILLER_LINE = "miller-line"
 
 GLASS_MISSION = {
     "title": "Operation Glass Strait",
@@ -24,39 +24,44 @@ GLASS_MISSION = {
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
 }
 
-HARROW_MISSION = {
-    "title": "Operation Harrow Bank",
+MILLER_MISSION = {
+    "title": "Operation Miller Line",
     "own_ship": "Kestrel",
-    "setting": "Fictional fisheries-surveillance exercise on the Harrow Bank.",
-    "task": "Decide whether submerged traffic is on the bank and send an evidence-based assessment by 0630.",
-    "relief": "Be within 3 nautical miles of station SOUTHING (2 east, -12 north) at 0700.",
+    "setting": "Fictional barrier watch on the Miller Line. This is not a search for an unknown contact and there is no relief station.",
+    "task": (
+        "Detect a submerged boat as it crosses the Miller Line. "
+        "A surface ship may cross the same line. That crossing does not end the watch. "
+        "The watch ends at 0700 wherever Kestrel is."
+    ),
     "chart": (
         "Local grid in nautical miles: east is +x, north is +y. "
-        "Harrow Bank operating area: x=0 to 16, y=0 to 12. "
-        "Own ship starts south of that area. "
-        "One water depth and one sound-speed profile apply on the whole chart. "
-        "The bank is an operating area, not a modeled change in bathymetry."
+        "The Miller Line is the meridian x=0, from y=-18 to y=+18. "
+        "North sector is y>0. South sector is y<0. "
+        "One water depth and one sound-speed profile apply on both sides of the line."
     ),
-    "orders": "Observe and report. Preserve discretion and meet the relief commitment. No offensive weapons employment is authorized in this patrol.",
+    "orders": (
+        "Hold the barrier and observe. No offensive weapons employment is authorized. "
+        "Kestrel may cross to the east of the line; that leaves the assigned side and is recorded. "
+        "There is no station to reach."
+    ),
     "intel": (
-        "Shore authorities asked for a check of the bank and did not provide a contact solution. "
-        "Fishing traffic is expected. A diesel submarine is one possibility, not an established fact. "
-        "A later bulletin may be wrong and does not identify a track."
+        "A submerged westbound transit is expected to cross during the watch, in one sector. "
+        "A shore plot delivered by radio may name the sector. The plot can be wrong and is not a track. "
+        "A loud surface ship may cross the other sector first."
     ),
     "radio": (
-        "An intelligence update is scheduled for 0310; a later update for 0510. "
-        "Messages remain dated reports available for retrieval. "
+        "A sector plot is scheduled for 0120. An operations reminder is scheduled for 0330. "
         "A mast receive can copy one once its scheduled time has passed. "
-        "A buoyant receive adds that mode's published delivery latency. "
-        "A completed mast transmission can be intercepted by a surface combatant inside the published range."
+        "A buoyant receive adds that mode's published delivery latency and then limits depth and speed until retrieval. "
+        "Sending an assessment is not the assigned task. A mast transmission can still be intercepted by a surface combatant inside the published range."
     ),
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
     "simplifications": (
-        "A diesel submarine that reaches its low-battery rule changes depth, speed limit and emitted spectrum at a five-minute boundary. "
-        "The mast does not report that state as a visual surface contact. "
-        "Only a submerged opponent maneuvers after detecting own ship. "
-        "A surface combatant that intercepts a mast transmission is recorded and does not change course because of that intercept. "
-        "Fishing vessels and biologics keep their published course, speed and depth cycles. Other traffic holds its initial course and speed."
+        "The crossing boat holds its initial course and speed unless it detects Kestrel, in which case it evades once from its own fix. "
+        "The surface ship and the surface combatant hold their initial courses. The biologic group keeps its published cycle. "
+        "The debrief counts an acoustic observation of the crossing boat at or before the crossing time. "
+        "A later detection, a visual mast sighting, and a transmitted presence assessment are not that result. "
+        "The mast does not see a deep boat as a surface contact."
     ),
 }
 
@@ -96,37 +101,34 @@ class Schedule:
             "deadline_text": self.deadline_text,
             "end_text": self.end_text,
             "end_reason": self.end_reason,
-            "relief": self.relief.as_state(),
+            "relief": None if self.relief is None else self.relief.as_state(),
         }
 
 
 class Scenario:
-    def __init__(self, identifier, mission, schedule, own_start, place, navigation_text):
+    def __init__(self, identifier, mission, schedule, own_start, place, navigation_text,
+                 geometry=None):
         self.identifier = identifier
         self.mission = mission
         self.schedule = schedule
         self.own_start = own_start
         self.place = place
         self.navigation_text = navigation_text
+        self.geometry = geometry
 
     def public_entry(self):
-        relief = self.schedule.relief
         start = self.own_start
-        return {
+        clock = {
+            "origin_minutes_past_midnight": self.schedule.clock_origin_minutes,
+            "end_minutes": self.schedule.end_minutes,
+        }
+        if self.schedule.report_due_minutes is not None:
+            clock["assessment_deadline_minutes"] = self.schedule.report_due_minutes
+        entry = {
             "id": self.identifier,
             "rules_version": "0.12",
             "mission": dict(self.mission),
-            "clock": {
-                "origin_minutes_past_midnight": self.schedule.clock_origin_minutes,
-                "assessment_deadline_minutes": self.schedule.report_due_minutes,
-                "end_minutes": self.schedule.end_minutes,
-            },
-            "relief": {
-                "name": relief.name,
-                "east_nm": relief.x,
-                "north_nm": relief.y,
-                "radius_nm": relief.radius_nm,
-            },
+            "clock": clock,
             "own_ship_start": {
                 "east_nm": start["x"],
                 "north_nm": start["y"],
@@ -141,6 +143,17 @@ class Scenario:
                 "state which draw this patrol received."
             ),
         }
+        relief = self.schedule.relief
+        if relief is not None:
+            entry["relief"] = {
+                "name": relief.name,
+                "east_nm": relief.x,
+                "north_nm": relief.y,
+                "radius_nm": relief.radius_nm,
+            }
+        if self.geometry is not None:
+            entry["geometry"] = dict(self.geometry)
+        return entry
 
 
 def _glass_navigation(_own):
@@ -228,181 +241,143 @@ def _place_glass(state, dice, make_entity):
     ]
 
 
-def _harrow_navigation(own):
-    relief = HARROW_SCHEDULE.relief
-    east = relief.x - own["x"]
-    north = relief.y - own["y"]
-    gap = math.hypot(east, north)
-    bearing = math.degrees(math.atan2(east, north)) % 360
+def _miller_navigation(own):
     return (
-        f"0210. Local position ({own['x']:g} east, {own['y']:g} north). "
+        f"0100. Local position ({own['x']:g} east, {own['y']:g} north). "
         f"Course {own['course']:03.0f}, speed {own['speed']:g} knots, "
         f"depth {own['depth']:g} feet. "
-        f"{relief.name} bears {bearing:.0f} true, {gap:.2f} nautical miles."
+        "The Miller Line is 10 nautical miles due east. No relief station is assigned."
     )
 
 
-def _place_harrow(state, dice, make_entity):
-    """Hidden Harrow Bank layout.
+def _westbound(dice, label):
+    return dice.between(f"{label}-course", 260, 280)
 
-    The patrol question is whether a diesel submarine is among the bank
-    traffic. When one is present it starts on battery, with a fictional charge
-    low enough that the published drain reaches the snorkeling rule before the
-    assessment deadline if it keeps the drawn speed. Fishing traffic is always
-    present. A biologic group is an alternative explanation, not an extra
-    submarine. The warship starts outside mast-intercept range of the opening
-    position and inside that range of the northern bank.
+
+def _place_miller(state, dice, make_entity):
+    """Hidden Miller Line layout.
+
+    A diesel submarine starts east of the line and will cross it during the
+    watch if it keeps the drawn course and speed. Its sector is never the
+    center. A merchant starts closer to the line in the opposite sector and
+    crosses first. A shore plot names a sector and is wrong on the draw stored
+    in this module. The plot text does not contain the crossing latitude.
     """
-    case = dice.choose(
-        "harrow:case",
-        ("diesel", "biologic", "surface"),
-        (0.42, 0.33, 0.25),
+    north = dice.u("miller:sector") < 0.5
+    sign = 1.0 if north else -1.0
+    diesel_y = sign * dice.between("miller:diesel-y", 6, 16)
+    diesel = make_entity(
+        DART,
+        id="actor-crosser",
+        x=dice.between("miller:diesel-x", 18, 24),
+        y=diesel_y,
+        course=_westbound(dice, "miller:diesel"),
+        speed=dice.between("miller:diesel-speed", 5, 7),
+        depth=dice.between("miller:diesel-depth", 280, 520),
+        aware=False,
+        last_heard=None,
+        evaded=False,
+        name="Wicket",
+        intent="Cross the line on the initial course. Evade if an observer is detected.",
     )
-    submerged = case == "diesel"
-    if case == "diesel":
-        battery = dice.between("harrow:battery", 28, 32)
-        primary = make_entity(
-            DART,
-            id="actor-a",
-            x=dice.between("harrow:diesel-x", 6, 11),
-            y=dice.between("harrow:diesel-y", 2, 5),
-            course=dice.between("harrow:diesel-course", 350, 370) % 360,
-            speed=dice.between("harrow:diesel-speed", 6, 7),
-            depth=dice.between("harrow:diesel-depth", 180, 450),
-            resources={"battery_energy": battery},
-            aware=False,
-            last_heard=None,
-            evaded=False,
-            name="Plover",
-            intent=(
-                "Continue the initial course on battery until the battery "
-                "requires a charge, then snorkel. Avoid an observer if one is detected."
-            ),
-        )
-    elif case == "biologic":
-        primary = make_entity(
-            BIOLOGIC,
-            id="actor-a",
-            x=dice.between("harrow:biologic-x", 7, 12),
-            y=dice.between("harrow:biologic-y", 3, 8),
-            course=dice.between("harrow:biologic-course", 0, 359),
-            speed=dice.between("harrow:biologic-speed", 1.5, 4),
-            depth=dice.between("harrow:biologic-depth", 120, 500),
-            aware=False,
-            last_heard=None,
-            evaded=False,
-            name="Chorus",
-            intent="Vocalize and shift course, speed and depth on the published cycle.",
-        )
-    else:
-        primary = _fishing_vessel(
-            make_entity, dice, "harrow:primary-fisher", "actor-a", "Nettle",
-            "Work the bank, shifting between transit and fishing.",
-        )
-    state["actors"].append(primary)
-    if case == "surface":
-        state["actors"].append(_fishing_vessel(
-            make_entity, dice, "harrow:fisher", "actor-2", "Gorse",
-            "Work the bank, shifting between transit and fishing.",
-        ))
-    else:
-        state["actors"].append(_fishing_vessel(
-            make_entity, dice, "harrow:fisher-a", "actor-2", "Nettle",
-            "Work the bank, shifting between transit and fishing.",
-        ))
-        state["actors"].append(_fishing_vessel(
-            make_entity, dice, "harrow:fisher-b", "actor-3", "Gorse",
-            "Work the bank, shifting between transit and fishing.",
-        ))
+    state["actors"].append(diesel)
+    merchant_y = -sign * dice.between("miller:merchant-y", 8, 16)
     state["actors"].append(make_entity(
         MERCHANT,
         id="actor-merchant",
-        x=dice.between("harrow:merchant-x", 1, 4),
-        y=dice.between("harrow:merchant-y", 4, 8),
-        course=dice.between("harrow:merchant-course", 80, 100),
-        speed=dice.between("harrow:merchant-speed", 9, 12),
+        x=dice.between("miller:merchant-x", 8, 12),
+        y=merchant_y,
+        course=_westbound(dice, "miller:merchant"),
+        speed=dice.between("miller:merchant-speed", 10, 12),
         depth=0,
         aware=False,
         last_heard=None,
         evaded=False,
-        name="Halyard",
-        intent="Continue an eastbound passage across the bank.",
+        name="Trestle",
+        intent="Cross the line on the initial course and continue west.",
     ))
     state["actors"].append(make_entity(
+        BIOLOGIC,
+        id="actor-biologic",
+        x=dice.between("miller:biologic-x", -3, 3),
+        y=dice.between("miller:biologic-y", -6, 6),
+        course=dice.between("miller:biologic-course", 0, 359),
+        speed=dice.between("miller:biologic-speed", 1.5, 3.5),
+        depth=dice.between("miller:biologic-depth", 150, 400),
+        aware=False,
+        last_heard=None,
+        evaded=False,
+        name="Murmur",
+        intent="Remain near the center of the line and cycle vocalization.",
+    ))
+    patrol_north = dice.u("miller:warship-direction") < 0.5
+    state["actors"].append(make_entity(
         WARSHIP,
-        id="actor-warship",
-        x=dice.between("harrow:warship-x", 16, 20),
-        y=dice.between("harrow:warship-y", 9, 13),
-        course=dice.between("harrow:warship-course", 250, 280),
-        speed=dice.between("harrow:warship-speed", 8, 12),
+        id="actor-picket",
+        x=dice.between("miller:warship-x", 8, 14),
+        y=dice.between("miller:warship-y", -8, 8),
+        course=0.0 if patrol_north else 180.0,
+        speed=dice.between("miller:warship-speed", 8, 12),
         depth=0,
         aware=False,
         last_heard=None,
         evaded=False,
-        name="Cresset",
-        intent="Hold the initial westbound course across the northern bank.",
+        name="Picket",
+        intent="Patrol north or south on the east side of the line. Do not cross it.",
     ))
-    shore_correct = dice.u("harrow:shore-source") < 0.76
-    if submerged == shore_correct:
-        estimate = (
-            "Fisheries patrol reports a possible submerged contact among the bank traffic."
-            if submerged
-            else "Fisheries patrol reports no separate submerged contact; bank traffic may be surface or biologic."
-        )
-    else:
-        estimate = (
-            "Fisheries patrol reports no separate submerged contact; bank traffic may be surface or biologic."
-            if submerged
-            else "Fisheries patrol reports a possible submerged contact among the bank traffic."
-        )
+    state["barrier"] = {
+        "line_x": 0.0,
+        "south_y": -18.0,
+        "north_y": 18.0,
+        "crosser_id": diesel["id"],
+        "crossed": False,
+        "crossing_elapsed_minutes": None,
+        "own_ship_crossed": False,
+    }
+    plot_north = north if dice.u("miller:plot") < 0.68 else not north
+    sector_name = "north" if plot_north else "south"
+    side = "north of center" if plot_north else "south of center"
     state["bulletins"] = [
         {
-            "id": "INTEL-0310",
-            "available": 60,
+            "id": "PLOT-0120",
+            "available": 20,
             "text": (
-                "0310 intelligence update: " + estimate +
-                " Source confidence: moderate; exact track unavailable. "
-                "This is an independent shore report, not confirmed identification."
+                "0120 shore plot: the submerged transit is estimated in the "
+                f"{sector_name} sector of the Miller Line, {side}. "
+                "Confidence moderate. This is not a track and it does not "
+                "give a latitude."
             ),
         },
         {
-            "id": "OPS-0510",
-            "available": 180,
+            "id": "OPS-0330",
+            "available": 150,
             "text": (
-                "0510 operations update: assessment deadline 0630 and relief "
-                "station time 0700 remain unchanged. A change in received sound "
-                "is a new measurement. It does not by itself establish a submarine."
+                "0330 operations update: the barrier watch still ends at 0700. "
+                "No relief station is assigned. A surface crossing does not "
+                "close the submerged watch."
             ),
         },
     ]
 
 
-def _fishing_vessel(make_entity, dice, label, actor_id, name, intent):
-    return make_entity(
-        FISHER,
-        id=actor_id,
-        x=dice.between(f"{label}-x", 2, 14),
-        y=dice.between(f"{label}-y", 1, 10),
-        course=dice.between(f"{label}-course", 0, 359),
-        speed=dice.between(f"{label}-speed", 3, 6),
-        depth=0,
-        aware=False,
-        last_heard=None,
-        evaded=False,
-        name=name,
-        intent=intent,
-    )
-
-
-HARROW_SCHEDULE = Schedule(
-    clock_origin_minutes=130,
-    report_due_minutes=260,
-    end_minutes=290,
-    deadline_text="0630 assessment deadline reached.",
-    end_text="0700. Patrol exercise complete; the debrief can now be requested.",
-    end_reason="0700 relief time reached",
-    relief=Relief("SOUTHING", 2.0, -12.0, 3.0),
+MILLER_SCHEDULE = Schedule(
+    clock_origin_minutes=60,
+    report_due_minutes=None,
+    end_minutes=360,
+    deadline_text="",
+    end_text="0700. Barrier watch complete; the debrief can now be requested.",
+    end_reason="0700 barrier watch ended",
+    relief=None,
 )
+
+MILLER_START = {
+    "x": -10.0,
+    "y": 0.0,
+    "course": 0.0,
+    "speed": 5.0,
+    "depth": 400.0,
+    "operating_mode": "standard",
+}
 
 GLASS_SCHEDULE = Schedule(
     clock_origin_minutes=190,
@@ -423,15 +398,6 @@ GLASS_START = {
     "operating_mode": KESTREL.default_mode,
 }
 
-HARROW_START = {
-    "x": 8.0,
-    "y": -6.0,
-    "course": 0.0,
-    "speed": 4.0,
-    "depth": 400.0,
-    "operating_mode": "standard",
-}
-
 SCENARIOS = {
     GLASS_STRAIT: Scenario(
         GLASS_STRAIT,
@@ -441,13 +407,20 @@ SCENARIOS = {
         _place_glass,
         _glass_navigation,
     ),
-    HARROW_BANK: Scenario(
-        HARROW_BANK,
-        HARROW_MISSION,
-        HARROW_SCHEDULE,
-        HARROW_START,
-        _place_harrow,
-        _harrow_navigation,
+    MILLER_LINE: Scenario(
+        MILLER_LINE,
+        MILLER_MISSION,
+        MILLER_SCHEDULE,
+        MILLER_START,
+        _place_miller,
+        _miller_navigation,
+        geometry={
+            "type": "barrier_line",
+            "line_east_nm": 0.0,
+            "south_nm": -18.0,
+            "north_nm": 18.0,
+            "sectors": "North is y>0. South is y<0.",
+        },
     ),
 }
 

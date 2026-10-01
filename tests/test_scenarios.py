@@ -1,46 +1,41 @@
 """Published scenarios keep their briefs public and their layouts hidden."""
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
 
-from submarine_command import engine, narrator, spectra
-from submarine_command.platforms import BIOLOGIC, DART, EntityCategory
-from submarine_command.scenarios import GLASS_MISSION, HARROW_BANK
+from submarine_command import engine, narrator
+from submarine_command.platforms import DART, EntityCategory
+from submarine_command.scenarios import GLASS_MISSION, MILLER_LINE
 
 
-DIESEL_SEED = f"{0:064x}"
-SURFACE_SEED = f"{3:064x}"
-BIOLOGIC_SEED = f"{5:064x}"
-CAPPED_SEED = f"{27:064x}"
 GLASS_SEED = "ab" * 32
-HIDDEN_NAMES = ("Plover", "Nettle", "Gorse", "Halyard", "Cresset", "Chorus")
+HIDDEN_NAMES = ("Wicket", "Trestle", "Murmur", "Picket")
 
 
-def listen_order(game, minutes=20, **overrides):
-    order = {
-        "id": f"listen-{len(game['events'])}",
+def hold_order(game, minutes=60):
+    """Stay on the west side of the line. Minimum speed is 2 knots."""
+    return {
+        "id": f"hold-{len(game['events'])}",
         "expected_turn": len(game["events"]),
         "activity": "listen",
         "minutes": minutes,
-        "course": 0,
-        "speed": 4,
+        "course": 180,
+        "speed": 2,
         "depth": 400,
-        "operating_mode": "standard",
+        "operating_mode": "quiet",
         "interrupt_on": [],
     }
-    order.update(overrides)
-    return order
 
 
-def end_order(game):
-    return {
-        "id": "end-exercise",
-        "expected_turn": len(game["events"]),
-        "activity": "end",
-    }
+def hours_until_line(actor):
+    rate = math.sin(math.radians(actor["course"])) * actor["speed"]
+    if rate >= -0.1:
+        return None
+    return actor["x"] / -rate
 
 
 class GlassStraitRegressionTests(unittest.TestCase):
@@ -84,137 +79,113 @@ class GlassStraitRegressionTests(unittest.TestCase):
         self.assertEqual(outcomes["relief_station"], "RELIEF")
 
 
-class HarrowBankTests(unittest.TestCase):
+class MillerLineTests(unittest.TestCase):
     def test_unknown_scenario_is_rejected_before_a_world_is_drawn(self):
         with self.assertRaises(ValueError) as caught:
             engine.initialize(scenario="not-a-patrol")
-        self.assertIn("harrow-bank", str(caught.exception))
+        self.assertIn("miller-line", str(caught.exception))
         self.assertIn("glass-strait", str(caught.exception))
 
-    def test_opening_brief_hides_the_layout(self):
-        game = engine.initialize(DIESEL_SEED, HARROW_BANK)
+    def test_opening_brief_is_a_barrier_and_hides_the_crossing(self):
+        game = engine.initialize(f"{0:064x}", MILLER_LINE)
         public = engine.public_view(game)
-        history = engine.public_history(game)
-        catalog = json.dumps(engine.capability_report())
-        visible = json.dumps({"public": public, "history": history})
-        self.assertEqual(public["game"], "Operation Harrow Bank")
-        self.assertEqual(public["time"], "0210")
-        self.assertEqual(public["navigation"]["relief_station"], "SOUTHING")
-        self.assertEqual(public["navigation"]["relief_distance_nm"], 8.49)
-        self.assertEqual(public["navigation"]["relief_bearing_true"], 225)
-        self.assertIn("mast does not report", public["mission"]["simplifications"])
+        visible = json.dumps({
+            "public": public,
+            "history": engine.public_history(game),
+            "catalog": engine.capability_report(),
+        })
+        self.assertEqual(public["game"], "Operation Miller Line")
+        self.assertEqual(public["time"], "0100")
+        self.assertNotIn("relief_station", public["navigation"])
+        self.assertEqual(public["navigation"]["barrier_line_east_nm"], 0)
+        self.assertEqual(public["navigation"]["east_of_line_nm"], -10)
+        self.assertEqual(public["navigation"]["minutes_remaining"], 360)
+        self.assertIn("No relief station", public["reports_this_turn"][0]["text"])
         for name in HIDDEN_NAMES:
             self.assertNotIn(name, visible)
-            self.assertNotIn(name, catalog)
-        self.assertNotIn("Fisheries patrol reports", visible)
-        self.assertNotIn("harrow:case", visible)
-        self.assertNotIn("Plover", catalog)
-        diesel = next(actor for actor in game["state"]["actors"] if actor["spec"] == DART.identifier)
-        self.assertNotIn(str(diesel["resources"]["battery_energy"]), visible)
+        self.assertNotIn("crosser_id", visible)
+        self.assertNotIn("crossing_elapsed_minutes", visible)
+        diesel = game["state"]["actors"][0]
+        self.assertNotIn(f"{diesel['y']:.3f}", visible)
+        self.assertNotIn(str(round(diesel["y"], 2)), visible)
 
-    def test_same_seed_replays_and_a_different_scenario_does_not(self):
-        first = engine.initialize(DIESEL_SEED, HARROW_BANK)
-        second = engine.initialize(DIESEL_SEED, HARROW_BANK)
-        glass = engine.initialize(DIESEL_SEED)
-        self.assertEqual(engine.canonical(first["initial_state"]), engine.canonical(second["initial_state"]))
-        self.assertNotEqual(first["initial_state"]["mission"]["title"], glass["initial_state"]["mission"]["title"])
-        engine.apply_order(first, listen_order(first, minutes=10, id="first-leg"))
+    def test_same_seed_replays_and_glass_strait_is_a_different_mission(self):
+        first = engine.initialize(f"{1:064x}", MILLER_LINE)
+        second = engine.initialize(f"{1:064x}", MILLER_LINE)
+        glass = engine.initialize(f"{1:064x}")
+        self.assertEqual(
+            engine.canonical(first["initial_state"]),
+            engine.canonical(second["initial_state"]),
+        )
+        self.assertNotEqual(
+            first["initial_state"]["mission"]["title"],
+            glass["initial_state"]["mission"]["title"],
+        )
+        engine.apply_order(first, hold_order(first, minutes=10))
         self.assertTrue(engine.verify(first)["verified"])
 
-    def test_warship_starts_outside_intercept_range_and_inside_it_on_the_bank(self):
-        for index in range(20):
-            state = engine.new_world(f"{index:064x}", HARROW_BANK)
+    def test_the_submarine_crosses_one_sector_after_the_merchant_crosses_the_other(self):
+        plot_right = 0
+        plot_wrong = 0
+        for index in range(40):
+            state = engine.new_world(f"{index:064x}", MILLER_LINE)
+            diesel = state["actors"][0]
+            merchant = next(actor for actor in state["actors"] if actor["name"] == "Trestle")
             warship = next(
                 actor for actor in state["actors"]
                 if engine.entity_spec(actor).category == EntityCategory.SURFACE_WARSHIP
             )
-            self.assertGreater(engine.distance(state["own"], warship), 15)
-            self.assertLessEqual(engine.distance({"x": 8, "y": 6}, warship), 15)
-
-    def test_each_layout_is_drawn_and_only_the_diesel_layout_is_submerged(self):
-        counts = {"diesel": 0, "biologic": 0, "surface": 0}
-        for index in range(120):
-            state = engine.new_world(f"{index:064x}", HARROW_BANK)
-            primary = state["actors"][0]
-            submerged = [
-                actor for actor in state["actors"]
-                if engine.entity_spec(actor).category == EntityCategory.DIESEL_SUBMARINE
-            ]
-            if primary["spec"] == DART.identifier:
-                counts["diesel"] += 1
-                self.assertEqual(len(submerged), 1)
-                battery = primary["resources"]["battery_energy"]
-                self.assertGreater(battery, 24)
-                self.assertLessEqual(battery, 32)
-                self.assertGreaterEqual(primary["speed"], 6)
-                self.assertLessEqual(primary["speed"], 7)
-            elif primary["spec"] == BIOLOGIC.identifier:
-                counts["biologic"] += 1
-                self.assertEqual(submerged, [])
+            self.assertEqual(diesel["spec"], DART.identifier)
+            self.assertGreaterEqual(abs(diesel["y"]), 6)
+            self.assertLessEqual(abs(diesel["y"]), 16)
+            self.assertLess(diesel["y"] * merchant["y"], 0)
+            self.assertGreater(diesel["x"], 0)
+            self.assertGreater(merchant["x"], 0)
+            self.assertGreater(warship["x"], 0)
+            self.assertIn(warship["course"], (0.0, 180.0))
+            diesel_hours = hours_until_line(diesel)
+            merchant_hours = hours_until_line(merchant)
+            self.assertIsNotNone(diesel_hours)
+            self.assertLess(merchant_hours, diesel_hours)
+            self.assertLess(diesel_hours, 6)
+            self.assertLess(merchant_hours, 1.5)
+            self.assertGreater(diesel["resources"]["battery_energy"], 60)
+            plot = state["bulletins"][0]["text"]
+            self.assertNotIn(str(round(diesel["y"], 1)), plot)
+            named_north = "north sector" in plot
+            if named_north == (diesel["y"] > 0):
+                plot_right += 1
             else:
-                counts["surface"] += 1
-                self.assertEqual(submerged, [])
-                self.assertEqual(
-                    engine.entity_spec(primary).category,
-                    EntityCategory.FISHING_VESSEL,
-                )
-        self.assertGreater(counts["diesel"], 30)
-        self.assertGreater(counts["biologic"], 20)
-        self.assertGreater(counts["surface"], 15)
+                plot_wrong += 1
+        self.assertGreater(plot_right, plot_wrong)
+        self.assertGreater(plot_wrong, 4)
 
-    def test_diesel_reaches_snorkeling_before_the_deadline_without_a_visual_mast_contact(self):
-        game = engine.initialize(CAPPED_SEED, HARROW_BANK)
-        diesel = next(actor for actor in game["state"]["actors"] if actor["spec"] == DART.identifier)
-        before = {line["family"] for line in spectra.emitted_components(diesel)["lines"]}
-        self.assertIn("electric_motor", before)
-        self.assertNotIn("snorkel_diesel", before)
-        while diesel["operating_mode"] != "snorkeling":
-            self.assertLess(game["state"]["t"], 260)
-            engine.apply_order(game, listen_order(game))
-            diesel = next(actor for actor in game["state"]["actors"] if actor["spec"] == DART.identifier)
-        self.assertLess(game["state"]["t"], 260)
-        self.assertEqual(diesel["depth"], 50)
-        self.assertLessEqual(diesel["speed"], 7)
-        after = {line["family"] for line in spectra.emitted_components(diesel)["lines"]}
-        self.assertIn("snorkel_diesel", after)
-        self.assertNotIn("electric_motor", after)
-        for actor in game["state"]["actors"]:
-            if actor["id"] != diesel["id"]:
-                actor["x"] += 40
-        game["state"]["own"]["x"] = diesel["x"]
-        game["state"]["own"]["y"] = diesel["y"] + 1
-        seen = engine.mast_observations(
-            game["state"], engine.Dice(game["seed"], game["state"]["rng_trace"])
-        )
-        self.assertEqual(seen, 0)
-        self.assertFalse(any(
-            track["actor"] == diesel["id"] and track.get("receiver_kind") == "visual"
-            for track in game["state"]["tracks"]
-        ))
-
-    def test_deadline_and_presence_score_follow_the_harrow_schedule(self):
-        game = engine.initialize(SURFACE_SEED, HARROW_BANK)
-        while not any(report["category"] == "deadline" for report in game["state"]["reports"]):
-            self.assertLess(game["state"]["t"], 290)
-            engine.apply_order(game, listen_order(game, minutes=20))
-        self.assertFalse(game["state"]["ended"])
-        deadline = [
-            report for report in game["state"]["reports"] if report["category"] == "deadline"
-        ]
-        self.assertEqual(deadline[0]["text"], "0630 assessment deadline reached.")
-        self.assertEqual(deadline[0]["time"], "0630")
-        engine.apply_order(game, end_order(game))
+    def test_holding_the_west_side_records_the_crossing_and_not_a_station(self):
+        game = engine.initialize(f"{4:064x}", MILLER_LINE)
+        while not game["state"]["ended"]:
+            engine.apply_order(game, hold_order(game))
+        self.assertEqual(game["state"]["t"], 360)
+        self.assertLess(game["state"]["own"]["x"], 0)
         brief = engine.debrief(game)
-        self.assertEqual(brief["scenario"], HARROW_BANK)
-        self.assertNotIn("at_relief_at_0800", brief["outcomes"])
-        self.assertEqual(brief["outcomes"]["relief_station"], "SOUTHING")
-        self.assertIsNone(brief["outcomes"]["at_relief_station"])
-        relief = brief["initial_state"]["schedule"]["relief"]
-        self.assertEqual((relief["x"], relief["y"], relief["radius_nm"]), (2.0, -12.0, 3.0))
-        self.assertNotEqual(
-            engine.contact_kind(brief["initial_state"]["actors"][0]),
-            "submerged",
-        )
+        outcomes = brief["outcomes"]
+        self.assertEqual(outcomes["objective"], "barrier_line")
+        self.assertNotIn("at_relief_station", outcomes)
+        self.assertNotIn("assessment_sent_by_deadline", outcomes)
+        self.assertFalse(outcomes["own_ship_crossed_the_line"])
+        self.assertTrue(outcomes["crossed_the_line"])
+        self.assertGreater(outcomes["crossing_elapsed_minutes"], 120)
+        self.assertLess(outcomes["crossing_elapsed_minutes"], 360)
+        crossing = outcomes["crossing_elapsed_minutes"]
+        times = engine._acoustic_observation_times(game["state"], "actor-crosser")
+        before = any(stamp <= crossing for stamp in times)
+        self.assertEqual(outcomes["detected_at_or_before_crossing"], before)
+        self.assertFalse(any(
+            report["category"] == "deadline" for report in game["state"]["reports"]
+        ))
+        self.assertTrue(any(
+            report["category"] == "exercise_end" and "0700" in report["text"]
+            for report in game["state"]["reports"]
+        ))
 
     def test_cli_rejects_an_unknown_scenario_without_creating_a_save(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -234,10 +205,10 @@ class NarratorScenarioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             store = narrator.SessionStore(Path(folder))
             key = "b2" * 16
-            started = store.start(key, HARROW_BANK)
-            self.assertEqual(started["status"]["scenario"], HARROW_BANK)
-            self.assertEqual(store.start(key, HARROW_BANK), started)
-            self.assertEqual(store.start(key)["status"]["scenario"], HARROW_BANK)
+            started = store.start(key, MILLER_LINE)
+            self.assertEqual(started["status"]["scenario"], MILLER_LINE)
+            self.assertEqual(store.start(key, MILLER_LINE), started)
+            self.assertEqual(store.start(key)["status"]["scenario"], MILLER_LINE)
             with self.assertRaises(narrator.NarratorError) as caught:
                 store.start(key, "glass-strait")
             self.assertEqual(caught.exception.code, "invalid_request")

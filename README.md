@@ -35,7 +35,7 @@ existing session. `status`, `history`, `capabilities`, and `verify` are read-onl
 they do not advance time or generate fresh sensor observations.
 
 ```bash
-python -m submarine_command --session .sessions/harrow-bank init --scenario harrow-bank
+python -m submarine_command --session .sessions/miller-line init --scenario miller-line
 ```
 
 `init` without `--scenario` starts Operation Glass Strait. The public catalog
@@ -197,7 +197,7 @@ verification. During active play, debrief refuses to reveal anything.
 
 | Area | Behavior |
 |---|---|
-| Scenarios | Operation Glass Strait and Operation Harrow Bank. Each has a public brief, clock and relief station; opposing traffic is drawn at initialization and stays hidden |
+| Scenarios | Operation Glass Strait, a corridor assessment with a relief station, and Operation Miller Line, a barrier watch with no station. Opposing traffic is drawn at initialization and stays hidden |
 | Hidden state | Persistent seed, fixed initial contacts, event-keyed random draws, replay verification, public-only outputs |
 | Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |

@@ -1187,6 +1187,7 @@ def tick_world(state, dice, order, first_tick):
     for actor in state["actors"]:
         move(actor, TICK)
         advance_entity_components(actor)
+    update_barrier(state)
     _begin_towed_activity(state, order)
     _update_towed_stability(state, before_course)
     if active:
@@ -1244,7 +1245,8 @@ def tick_world(state, dice, order, first_tick):
         state["maneuvering"] = False
         report(state, "Ship control", steady_text(state), "maneuver_complete")
     schedule = state["schedule"]
-    if t >= schedule["report_due_minutes"] and not state["deadline_announced"]:
+    due = schedule["report_due_minutes"]
+    if due is not None and t >= due and not state["deadline_announced"]:
         state["deadline_announced"] = True
         report(state, "Navigation", schedule["deadline_text"], "deadline")
     if t >= schedule["end_minutes"]:
@@ -1536,14 +1538,55 @@ def capability_report():
     return result
 
 
+def update_barrier(state):
+    """Record a barrier crossing after movement. No random draw."""
+    barrier = state.get("barrier")
+    if not barrier:
+        return
+    if state["own"]["x"] > barrier["line_x"]:
+        barrier["own_ship_crossed"] = True
+    if barrier["crossed"]:
+        return
+    crosser = next(
+        actor for actor in state["actors"] if actor["id"] == barrier["crosser_id"]
+    )
+    if crosser["x"] <= barrier["line_x"]:
+        barrier["crossed"] = True
+        barrier["crossing_elapsed_minutes"] = state["t"]
+
+
+def navigation_public(state):
+    """Player navigation. A barrier watch does not invent a relief station."""
+    schedule = state["schedule"]
+    own = state["own"]
+    remaining = max(0, schedule["end_minutes"] - state["t"])
+    barrier = state.get("barrier")
+    if barrier:
+        return {
+            "barrier_line_east_nm": barrier["line_x"],
+            "barrier_south_nm": barrier["south_y"],
+            "barrier_north_nm": barrier["north_y"],
+            "east_of_line_nm": round(own["x"] - barrier["line_x"], 2),
+            "along_line_north_nm": round(own["y"], 2),
+            "minutes_remaining": remaining,
+        }
+    relief = schedule["relief"]
+    station = {"x": relief["x"], "y": relief["y"]}
+    gap = distance(own, station)
+    due = schedule["report_due_minutes"]
+    return {
+        "relief_distance_nm": round(gap, 2),
+        "relief_bearing_true": round(bearing(own, station)),
+        "minutes_to_relief": remaining,
+        "minimum_average_speed_to_station_knots": round(gap / (remaining / 60), 2) if remaining else None,
+        "minutes_to_assessment_deadline": max(0, due - state["t"]),
+        "relief_station": relief["name"],
+    }
+
+
 def public_view(game):
     state = game["state"]
     own = state["own"]
-    schedule = state["schedule"]
-    relief = schedule["relief"]
-    remaining = max(0, schedule["end_minutes"] - state["t"])
-    station = {"x": relief["x"], "y": relief["y"]}
-    gap = distance(own, station)
     tracks = []
     for tr in state["tracks"]:
         tracks.append({
@@ -1592,11 +1635,7 @@ def public_view(game):
                          },
                          "equipment": "Auxiliary vibration; sonar self-noise elevated" if state["pump_fault"] else "All systems available",
                          "repair_minutes_completed": state["repair_progress"]},
-            "navigation": {"relief_distance_nm": round(gap, 2), "relief_bearing_true": round(bearing(own, station)),
-                           "minutes_to_relief": remaining,
-                           "minimum_average_speed_to_station_knots": round(gap / (remaining / 60), 2) if remaining else None,
-                           "minutes_to_assessment_deadline": max(0, schedule["report_due_minutes"] - state["t"]),
-                           "relief_station": relief["name"]},
+            "navigation": navigation_public(state),
             "contacts": tracks, "transmitted_assessments": copy.deepcopy(state["sent"]),
             "reports_this_turn": copy.deepcopy(state["reports"][state["last_action_report_start"]:]),
             "report_count": len(state["reports"]),
@@ -1693,21 +1732,55 @@ def fsync_directory(path):
         os.close(descriptor)
 
 
-def debrief(game):
-    if not game["state"]["ended"]:
-        raise ValueError("Debrief is unavailable during play. End the exercise explicitly to reveal it.")
-    verification = verify(game)
-    state = game["state"]
+def _acoustic_observation_times(state, actor_id):
+    times = []
+    for track in state["tracks"]:
+        if track["actor"] != actor_id or track.get("receiver_kind") == "visual":
+            continue
+        for observation in track["observations"]:
+            if observation.get("source") == "mast":
+                continue
+            times.append(observation["elapsed_minutes"])
+    return times
+
+
+def _barrier_outcomes(state):
+    barrier = state["barrier"]
+    crossing = barrier["crossing_elapsed_minutes"]
+    times = _acoustic_observation_times(state, barrier["crosser_id"])
+    before = [stamp for stamp in times if crossing is not None and stamp <= crossing]
+    after = [stamp for stamp in times if crossing is not None and stamp > crossing]
+    crosser = next(actor for actor in state["actors"] if actor["id"] == barrier["crosser_id"])
+    return {
+        "objective": "barrier_line",
+        "crossed_the_line": barrier["crossed"],
+        "crossing_elapsed_minutes": crossing,
+        "detected_at_or_before_crossing": bool(before),
+        "detected_only_after_crossing": bool(after) and not before,
+        "own_ship_crossed_the_line": barrier["own_ship_crossed"],
+        "crosser_detected_own_ship": bool(crosser["aware"]),
+        "radio_intercepts": copy.deepcopy(state["radio_intercepts"]),
+    }
+
+
+def _station_outcomes(state, initial_state):
     schedule = state["schedule"]
     relief = schedule["relief"]
-    timely = [s for s in state["sent"] if s["elapsed_minutes"] <= schedule["report_due_minutes"]]
-    primary_kind = contact_kind(game["initial_state"]["actors"][0])
+    timely = [
+        sent for sent in state["sent"]
+        if sent["elapsed_minutes"] <= schedule["report_due_minutes"]
+    ]
+    primary_kind = contact_kind(initial_state["actors"][0])
     evaluations = []
     for sent in state["sent"]:
-        accurate = None if sent["assessment"] == "unresolved" else (sent["assessment"] == "submerged_present") == (primary_kind == "submerged")
-        evaluations.append({**sent, "matches_hidden_presence": accurate,
-                            "interpretation": "Outcome accuracy only; evaluate the judgment against the cited evidence separately."})
-    emitters = [state["own"], *state["actors"]]
+        accurate = None if sent["assessment"] == "unresolved" else (
+            sent["assessment"] == "submerged_present"
+        ) == (primary_kind == "submerged")
+        evaluations.append({
+            **sent,
+            "matches_hidden_presence": accurate,
+            "interpretation": "Outcome accuracy only; evaluate the judgment against the cited evidence separately.",
+        })
     at_relief = (
         distance(state["own"], {"x": relief["x"], "y": relief["y"]}) <= relief["radius_nm"]
         if state["t"] == schedule["end_minutes"] else None
@@ -1716,12 +1789,25 @@ def debrief(game):
         "assessment_sent_by_deadline": bool(timely),
         "at_relief_station": at_relief,
         "relief_station": relief["name"],
-        "opponent_detected_own_ship": any(a["aware"] for a in state["actors"]),
+        "opponent_detected_own_ship": any(actor["aware"] for actor in state["actors"]),
         "radio_intercepts": copy.deepcopy(state["radio_intercepts"]),
         "assessments": evaluations,
     }
     if state["scenario"] == GLASS_STRAIT:
         outcomes["at_relief_at_0800"] = at_relief
+    return outcomes
+
+
+def debrief(game):
+    if not game["state"]["ended"]:
+        raise ValueError("Debrief is unavailable during play. End the exercise explicitly to reveal it.")
+    verification = verify(game)
+    state = game["state"]
+    if state.get("barrier"):
+        outcomes = _barrier_outcomes(state)
+    else:
+        outcomes = _station_outcomes(state, game["initial_state"])
+    emitters = [state["own"], *state["actors"]]
     return {"spoilers": True, "verification": verification, "seed": game["seed"],
             "scenario": state["scenario"],
             "initial_state": game["initial_state"], "final_state": state, "events": game["events"],

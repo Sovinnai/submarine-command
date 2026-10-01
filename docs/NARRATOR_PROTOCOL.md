@@ -69,7 +69,7 @@ with the same scenario returns that session, and a retry that names a different
 scenario is rejected without rerolling it.
 
 ```json
-{"v":1,"request_id":"r2b","op":"start","params":{"idempotency_key":"7f3d9c0e1b2a4d5f60718293a4b5c6d7","scenario":"harrow-bank"}}
+{"v":1,"request_id":"r2b","op":"start","params":{"idempotency_key":"7f3d9c0e1b2a4d5f60718293a4b5c6d7","scenario":"miller-line"}}
 ```
 
 `status`, `history` and `verify` are read-only. They require the opaque
