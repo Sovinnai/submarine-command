@@ -316,6 +316,9 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(contract["maneuver"]["opposing_platforms"].startswith("Opposing entities are rate"))
         for field in ("course", "speed", "depth", "operating_mode", "interrupt_on", "expected_turn"):
             self.assertIn(field, contract["order_fields"]["required"])
+        self.assertIn("plan", contract["order_fields"]["plan_order"])
+        self.assertIn("scope any", contract["interrupts"]["contact_scope"])
+        self.assertIn("linear list", contract["plans"]["bounds"])
         self.assertIn("five-minute", contract["concurrency"]["communications"])
         self.assertIn("20 productive minutes", contract["concurrency"]["repair"])
 

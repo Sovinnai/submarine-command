@@ -16,7 +16,7 @@ import secrets
 import sys
 import tempfile
 
-from . import acoustics, arrays, spectra
+from . import acoustics, arrays, orders, spectra
 from .locking import session_lock
 from .observations import (
     ACOUSTIC_BIAS_DEGREES,
@@ -43,7 +43,7 @@ from .scenarios import (
     require_scenario,
 )
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 TICK = 5
 MANEUVER_STEP = 1
 # Glass Strait clock. Scenario state carries the patrol's own schedule.
@@ -84,9 +84,43 @@ COMMAND_CONTRACT = {
         "required": ["id", "expected_turn", "activity", "minutes", "course", "speed", "depth", "operating_mode", "interrupt_on"],
         "conditional": {"focus": "focus activity", "link": "receive, transmit, or retrieve activity", "assessment": "transmit activity", "message": "transmit activity", "basis": "transmit or employ activity", "weapon": "employ activity", "target": "employ activity", "confirm": "employ activity"},
         "end_order": ["id", "expected_turn", "activity"],
-        "description": "Every listed field must be stated explicitly. The engine supplies no default for any order field: an omitted field is rejected before any state changes rather than being filled in from current or previous settings. An empty interrupt_on list means no interrupt is selected, and an empty basis list means the assessment cites no report.",
+        "plan_order": ["id", "expected_turn", "plan"],
+        "description": "Every listed field must be stated explicitly. The engine supplies no default for any order field: an omitted field is rejected before any state changes rather than being filled in from current or previous settings. An empty interrupt_on list means no interrupt is selected, and an empty basis list means the assessment cites no report. A plan order takes only id, expected_turn and plan; each step carries its own command envelope.",
     },
-    "interrupts": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category and report id from that boundary; the unused portion is never continued automatically.",
+    "interrupts": {
+        "timing": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category, report id and contact id from that boundary; the unused portion is never continued automatically.",
+        "contact_scope": (
+            "new_contact, classification_change and contact_lost accept an explicit scope. "
+            "Bare category strings normalize to scope any. classification_change and "
+            "contact_lost also accept scope contacts or except with existing contact ids, "
+            "so a deliberately dropped contact can leave the interrupt watch without "
+            "deleting its history. new_contact accepts only scope any."
+        ),
+        "validated_form": (
+            "The validated order stores each watch as an object. Non-contact categories "
+            "are {category}. Contact categories always state scope; contacts lists appear "
+            "only for scope contacts or except."
+        ),
+    },
+    "plans": {
+        "bounds": (
+            f"A plan is a linear list of at most {orders.MAX_PLAN_STEPS} steps whose "
+            f"requested minutes sum to at most {orders.MAX_PLAN_MINUTES}. There are no "
+            "loops, gotos or nested plans."
+        ),
+        "conditions": (
+            "Optional when and stop_when conditions may read only published contact "
+            "status and navigation fields, combined with all, any and not. Every branch "
+            "is validated before the first state change. An unmet when with else stop, "
+            "an interrupt, or an ambiguous public value returns control."
+        ),
+        "receipt": (
+            "The execution receipt names executed steps, remaining steps, elapsed and "
+            "unused minutes, and the plan stop reason. A partially executed plan is one "
+            "atomic order: retrying the same id returns the same receipt without further "
+            "mutation."
+        ),
+    },
 }
 PUBLIC_REPORT_FIELDS = {
     "id", "time", "elapsed_minutes", "department", "category", "text",
@@ -1985,7 +2019,11 @@ def _patrol_allows(state, rule):
 
 
 def validate_order(raw, state):
-    allowed = {"id", "minutes", "course", "speed", "depth", "operating_mode", "activity", "focus", "link", "assessment", "message", "basis", "weapon", "target", "confirm", "interrupt_on", "expected_turn"}
+    allowed = {
+        "id", "minutes", "course", "speed", "depth", "operating_mode", "activity",
+        "focus", "link", "assessment", "message", "basis", "weapon", "target",
+        "confirm", "interrupt_on", "expected_turn", "plan",
+    }
     if not isinstance(raw, dict) or set(raw) - allowed:
         raise ValueError("Order must be an object using only the documented fields.")
     if not isinstance(raw.get("id"), str) or not 1 <= len(raw["id"]) <= 80:
@@ -1994,6 +2032,17 @@ def validate_order(raw, state):
     # No field is defaulted. An unstated setting is a rejected order, never an
     # assumed one: the engine must not choose a depth, speed, course, plant
     # lineup, duration or interrupt policy that the captain did not state.
+    if "plan" in order:
+        if set(raw) - {"id", "expected_turn", "plan"}:
+            raise ValueError(
+                "A plan order takes only id, expected_turn and plan. Each step "
+                "states its own command. No time has elapsed."
+            )
+        navigation_keys = set(navigation_public(state))
+        order["plan"] = orders.validate_plan(
+            order["plan"], state, validate_order, navigation_keys
+        )
+        return order
     require(order, "activity")
     activity = order["activity"]
     if activity not in ("listen", "focus", "active", "mast", "receive", "transmit", "retrieve", "repair", "stream_array", "recover_array", "employ", "end"):
@@ -2143,18 +2192,13 @@ def validate_order(raw, state):
             "on a transmit or employ order. No time has elapsed."
         )
     require(order, "interrupt_on")
-    valid_interrupts = {"new_contact", "classification_change", "equipment", "deadline", "contact_lost",
-                        "message_received", "radio_failure", "maneuver_complete", "activity_deferred",
-                        "antenna_deployed", "array_streamed", "array_stowed", "array_unstable",
-                        "operating_mode", "incoming_weapon", "weapon_effect"}
-    if not isinstance(order["interrupt_on"], list) or any(x not in valid_interrupts for x in order["interrupt_on"]):
-        raise ValueError("Unknown interrupt condition.")
+    order["interrupt_on"] = orders.normalize_interrupt_on(order["interrupt_on"], state)
     return order
 
 
 def simulate(state, seed, order):
     state["last_action_report_start"] = len(state["reports"])
-    if order["activity"] == "end":
+    if order.get("activity") == "end":
         state["ended"] = True
         state["end_reason"] = "Captain ended the exercise"
         ending = report(state, "Exercise", "Exercise ended by the captain.", "exercise_end")
@@ -2162,6 +2206,12 @@ def simulate(state, seed, order):
                 "integration_steps": 0, "stop_reason": "exercise_end",
                 "stop_events": [{"category": "exercise_end", "report_ids": [ending["id"]]}],
                 "maneuver": maneuver_view(state)}
+    if "plan" in order:
+        return _simulate_plan(state, seed, order)
+    return _simulate_window(state, seed, order)
+
+
+def _simulate_window(state, seed, order, stop_when=None):
     requested = order["minutes"]
     start = state["t"]
     dice = Dice(seed, state["rng_trace"])
@@ -2174,42 +2224,136 @@ def simulate(state, seed, order):
     state["focus"] = order.get("focus") if order["activity"] == "focus" else None
     stop = "requested_interval_complete"
     stop_events = []
+    interrupt_on = order["interrupt_on"]
     for i in range(order["minutes"] // TICK):
         before = len(state["reports"])
         tick_world(state, dice, order, first_tick=i == 0)
         new_reports = state["reports"][before:]
-        categories = {r["category"] for r in new_reports}
-        matched = categories.intersection(order["interrupt_on"])
+        matched_reports = orders.matching_interrupt_reports(new_reports, interrupt_on)
         if state["ended"]:
             stop = "exercise_end"
-            stop_events = _execution_events(new_reports, {"exercise_end"} | matched)
+            ending = [entry for entry in new_reports if entry["category"] == "exercise_end"]
+            stop_events = orders.execution_events_from_reports(ending + matched_reports)
             break
-        completed = categories.intersection(
-            {"transmission_complete", "message_received", "radio_empty", "repair_complete",
-             "retrieval_complete", "weapon_resolved", "array_streamed", "array_stowed"}
-        )
+        completed = [
+            entry for entry in new_reports
+            if entry["category"] in {
+                "transmission_complete", "message_received", "radio_empty",
+                "repair_complete", "retrieval_complete", "weapon_resolved",
+                "array_streamed", "array_stowed",
+            }
+        ]
         if completed:
             stop = "task_complete"
-            stop_events = _execution_events(new_reports, completed | matched)
+            stop_events = orders.execution_events_from_reports(completed + matched_reports)
             break
-        if matched:
+        if matched_reports:
             stop = "interrupt"
-            stop_events = _execution_events(new_reports, matched)
+            stop_events = orders.execution_events_from_reports(matched_reports)
             break
+        if stop_when is not None:
+            try:
+                if orders.evaluate_condition(
+                    stop_when, state, navigation_public(state)
+                ):
+                    stop = "condition_met"
+                    stop_events = []
+                    break
+            except orders.ConditionAmbiguous:
+                stop = "ambiguous_condition"
+                stop_events = []
+                break
     elapsed = state["t"] - start
     return {"requested_minutes": requested, "elapsed_minutes": elapsed,
             "unused_minutes": requested - elapsed, "integration_steps": elapsed // TICK,
             "stop_reason": stop, "stop_events": stop_events,
+            "interrupt_on": copy.deepcopy(interrupt_on),
             "maneuver": maneuver_view(state)}
+
+
+def _simulate_plan(state, seed, order):
+    steps = order["plan"]["steps"]
+    requested = sum(step["command"]["minutes"] for step in steps)
+    start = state["t"]
+    executed = []
+    remaining = list(enumerate(steps))
+    stop = "plan_complete"
+    stop_events = []
+    last_maneuver = maneuver_view(state)
+    while remaining:
+        index, step = remaining[0]
+        if "when" in step:
+            try:
+                applies = orders.evaluate_condition(
+                    step["when"], state, navigation_public(state)
+                )
+            except orders.ConditionAmbiguous:
+                stop = "ambiguous_condition"
+                break
+            if not applies:
+                if step.get("else", "stop") == "skip":
+                    executed.append({
+                        "index": index,
+                        **({"label": step["label"]} if "label" in step else {}),
+                        "elapsed_minutes": 0,
+                        "requested_minutes": step["command"]["minutes"],
+                        "unused_minutes": step["command"]["minutes"],
+                        "stop_reason": "condition_skipped",
+                        "stop_events": [],
+                    })
+                    remaining.pop(0)
+                    continue
+                stop = "condition_unmet"
+                break
+        remaining.pop(0)
+        result = _simulate_window(
+            state, seed, step["command"], stop_when=step.get("stop_when")
+        )
+        last_maneuver = result["maneuver"]
+        executed.append({
+            "index": index,
+            **({"label": step["label"]} if "label" in step else {}),
+            "elapsed_minutes": result["elapsed_minutes"],
+            "requested_minutes": result["requested_minutes"],
+            "unused_minutes": result["unused_minutes"],
+            "stop_reason": result["stop_reason"],
+            "stop_events": copy.deepcopy(result["stop_events"]),
+            "interrupt_on": copy.deepcopy(result["interrupt_on"]),
+        })
+        if result["stop_reason"] == "exercise_end":
+            stop = "exercise_end"
+            stop_events = result["stop_events"]
+            break
+        if result["stop_reason"] == "interrupt":
+            stop = "interrupt"
+            stop_events = result["stop_events"]
+            break
+        if result["stop_reason"] == "ambiguous_condition":
+            stop = "ambiguous_condition"
+            stop_events = result["stop_events"]
+            break
+        # task_complete, condition_met and requested_interval_complete advance.
+    elapsed = state["t"] - start
+    return {
+        "requested_minutes": requested,
+        "elapsed_minutes": elapsed,
+        "unused_minutes": requested - elapsed,
+        "integration_steps": elapsed // TICK,
+        "stop_reason": stop,
+        "stop_events": copy.deepcopy(stop_events),
+        "plan": {
+            "executed_steps": executed,
+            "remaining_steps": orders.remaining_plan_steps(remaining),
+            "stop_reason": stop,
+        },
+        "maneuver": last_maneuver,
+    }
 
 
 def _execution_events(reports, categories):
     """Summarize public reasons for stopping at an integration boundary."""
-    return [
-        {"category": category,
-         "report_ids": [entry["id"] for entry in reports if entry["category"] == category]}
-        for category in sorted(categories)
-    ]
+    selected = [entry for entry in reports if entry["category"] in categories]
+    return orders.execution_events_from_reports(selected)
 
 
 def published_scenario_ids():

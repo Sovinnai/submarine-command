@@ -1,3 +1,3 @@
 """An auditable submarine command game with a deliberately blind narrator."""
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"

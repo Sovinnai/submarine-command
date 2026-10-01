@@ -27,7 +27,7 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
-In rules version 0.13, a command window is 5–60 minutes in five-minute increments.
+In rules version 0.15, a command window is 5–60 minutes in five-minute increments.
 Five minutes is the resolution at which the world reports and at which every
 random draw is keyed. Events are therefore located at step boundaries. Opposing
 decisions use start-of-step information, then every platform moves over the same
@@ -53,6 +53,19 @@ communications mode has its own depth and speed envelope and the same
 whole-step rule. Repair credits only the minutes actually spent within its
 speed limit. An interrupt returns control without altering the commanded
 settings, and reports what was achieved against what was ordered.
+
+Contact-scoped interrupt watches cover `new_contact`, `classification_change`
+and `contact_lost`. A bare category means every contact and is stored as
+`scope: any` on the validated order. Classification and loss watches may also
+name specific contacts or exclude deliberately dropped contacts without deleting
+their history. The execution receipt reports which contacts satisfied a stop.
+
+A bounded plan is a linear sequence of at most eight already-validated step
+commands. Optional `when` and `stop_when` conditions may read only published
+contact status and navigation fields. Every branch is checked before mutation.
+An interrupt, unmet stop condition, or ambiguous public value returns control
+with executed steps, remaining steps, elapsed time and unused requested time.
+Plans do not loop.
 
 The engine supplies no default for any order field. An unstated duration, depth,
 course, speed, plant lineup or interrupt policy is a rejected order, not an
