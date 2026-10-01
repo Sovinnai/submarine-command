@@ -80,7 +80,7 @@ retains shell access under the same account remains policy-only isolation.
   battery and snorkeling tradeoffs use explicit fictional rates. Snorkeling
   changes depth, speed and spectrum at a five-minute boundary. The mast model
   does not report a snorkel as a visual surface contact.
-- A single auxiliary fault, a simple opposing reaction and no weapons-resolution model.
+- A single auxiliary fault and a small weapon model: a homing run that can destroy, disable, or dud from where the round is, plus a decoy and a noise maker. Opponents fire only under an engage doctrine, using their own detection record. Patrol authorization asks for confirmation and does not block a confirmed launch.
   A submerged opponent's evasion speed is drawn from its published range and
   then limited by the operating mode already in force. A surface combatant
   that intercepts a mast transmission is recorded and does not change course.

@@ -201,7 +201,7 @@ class MillerLineTests(unittest.TestCase):
 
 
 class CinderRoadTests(unittest.TestCase):
-    def test_opening_brief_publishes_attack_geometry_and_hides_the_convoy(self):
+    def test_opening_brief_authorizes_the_heavyweight_and_hides_the_convoy(self):
         game = engine.initialize(f"{0:064x}", CINDER_ROAD)
         public = engine.public_view(game)
         visible = json.dumps({
@@ -210,12 +210,14 @@ class CinderRoadTests(unittest.TestCase):
         })
         self.assertEqual(public["game"], "Operation Cinder Road")
         self.assertEqual(public["time"], "1600")
-        self.assertEqual(public["navigation"]["attack_range_nm"], 3)
-        self.assertEqual(public["navigation"]["escort_clear_nm"], 6)
+        self.assertEqual(public["navigation"]["lane_north_nm"], 0)
         self.assertEqual(public["navigation"]["convoy_exit_east_nm"], 30)
+        self.assertNotIn("attack_range_nm", public["navigation"])
         self.assertNotIn("relief_station", public["navigation"])
-        self.assertFalse(public["own_ship"]["restrictions"]["employment_available"])
-        self.assertIn("Weapon flight", public["own_ship"]["restrictions"]["exercise"])
+        self.assertTrue(public["own_ship"]["authorization"]["offensive_weapons"])
+        self.assertIn("authorized", public["own_ship"]["restrictions"]["exercise"])
+        glass = engine.public_view(engine.initialize(f"{0:064x}"))
+        self.assertFalse(glass["own_ship"]["authorization"]["offensive_weapons"])
         for name in ("Hasp", "Lanyard", "Brand", "Mote"):
             self.assertNotIn(name, visible)
         self.assertNotIn("escort_id", visible)
@@ -223,26 +225,33 @@ class CinderRoadTests(unittest.TestCase):
         guide = next(actor for actor in game["state"]["actors"] if actor["id"] == "actor-guide")
         self.assertNotIn(f"{guide['x']:.3f}", visible)
 
-    def test_escort_side_decides_whether_the_same_range_is_an_attack(self):
+    def test_escort_and_screen_fire_from_their_own_fix(self):
         game = engine.initialize(f"{2:064x}", CINDER_ROAD)
         state = game["state"]
-        guide = next(actor for actor in state["actors"] if actor["id"] == "actor-guide")
         escort = next(actor for actor in state["actors"] if actor["id"] == "actor-escort")
-        side = 1.0 if escort["y"] > guide["y"] else -1.0
-        state["own"]["x"] = guide["x"]
-        state["own"]["y"] = guide["y"] - side * 2.5
-        state["own"]["speed"] = 6
-        state["own"]["depth"] = 300
-        engine.update_convoy(state)
-        self.assertTrue(state["convoy"]["achieved"])
-        state["convoy"]["achieved"] = False
-        state["convoy"]["attack_elapsed_minutes"] = None
-        state["own"]["y"] = guide["y"] + side * 2.5
-        engine.update_convoy(state)
-        self.assertFalse(state["convoy"]["achieved"])
-        self.assertLess(engine.distance(state["own"], escort), 6)
+        screen = next(actor for actor in state["actors"] if actor["id"] == "actor-screen")
+        guide = next(actor for actor in state["actors"] if actor["id"] == "actor-guide")
+        self.assertEqual(escort["doctrine"], "engage")
+        self.assertEqual(screen["doctrine"], "engage")
+        self.assertEqual(guide["doctrine"], "passage")
+        self.assertGreaterEqual(abs(escort["y"] - guide["y"]), 5)
+        escort["aware"] = True
+        escort["last_heard"] = {
+            "x": state["own"]["x"],
+            "y": state["own"]["y"] + 40,
+            "time": state["t"],
+            "source": "acoustic",
+        }
+        held = escort["inventory"]["lightweight_round"]
+        engine.opponent_step(state, escort, engine.Dice(game["seed"], []), False)
+        self.assertEqual(escort["inventory"]["lightweight_round"], held - 1)
+        shot = state["weapon_runs"][-1]
+        self.assertEqual(shot["weapon"], "lightweight_round")
+        self.assertAlmostEqual(
+            shot["course"], engine.bearing(escort, escort["last_heard"]), places=5
+        )
 
-    def test_column_geometry_and_a_safe_side_approach_score_without_a_weapon(self):
+    def test_a_confirmed_heavyweight_can_casualty_a_merchant(self):
         for index in range(20):
             state = engine.new_world(f"{index:064x}", CINDER_ROAD)
             guide = next(actor for actor in state["actors"] if actor["id"] == "actor-guide")
@@ -251,42 +260,126 @@ class CinderRoadTests(unittest.TestCase):
             screen = next(actor for actor in state["actors"] if actor["id"] == "actor-screen")
             self.assertGreater(guide["x"], trailer["x"])
             self.assertGreater(screen["x"], guide["x"])
-            self.assertGreaterEqual(abs(escort["y"] - guide["y"]), 5)
-            self.assertLessEqual(abs(escort["y"] - guide["y"]), 6.5)
+            self.assertEqual(screen["doctrine"], "engage")
             for actor in (guide, trailer, escort, screen):
                 self.assertEqual(actor["course"], 90)
         game = engine.initialize(f"{5:064x}", CINDER_ROAD)
-        while not game["state"]["ended"] and not game["state"]["convoy"]["achieved"]:
-            state = game["state"]
-            guide = next(actor for actor in state["actors"] if actor["id"] == "actor-guide")
-            escort = next(actor for actor in state["actors"] if actor["id"] == "actor-escort")
-            side = 1.0 if escort["y"] > guide["y"] else -1.0
-            aim_x = guide["x"] + 6
-            aim_y = guide["y"] - side * 2.2
-            course = engine.bearing(state["own"], {"x": aim_x, "y": aim_y})
-            gap = engine.distance(state["own"], {"x": aim_x, "y": aim_y})
-            engine.apply_order(game, {
-                "id": f"close-{len(game['events'])}",
-                "expected_turn": len(game["events"]),
-                "activity": "listen",
-                "minutes": 20,
-                "course": course,
-                "speed": 6 if gap < 4 else 12,
-                "depth": 300,
-                "operating_mode": "standard",
-                "interrupt_on": [],
-            })
-        self.assertTrue(game["state"]["convoy"]["achieved"])
+        state = game["state"]
+        guide = next(actor for actor in state["actors"] if actor["id"] == "actor-guide")
+        for actor in state["actors"]:
+            if actor["id"] != "actor-guide":
+                actor.update(x=80.0, y=80.0, aware=False)
+        own = state["own"]
+        own.update(x=guide["x"], y=guide["y"] - 1.0, depth=200, speed=5, course=0)
+        state["ordered"]["depth"] = 200
+        state["ordered"]["speed"] = 5
+        report_id = state["reports"][0]["id"]
+        state["tracks"].append({
+            "id": "S99",
+            "actor": guide["id"],
+            "first": 0,
+            "last": 0,
+            "evidence": {},
+            "observations": [{
+                "bearing_true": engine.bearing(own, guide),
+                "range_estimate_nm": 1.0,
+                "report_id": report_id,
+                "elapsed_minutes": 0,
+            }],
+            "visual": None,
+            "receiver_id": None,
+            "receiver_kind": "visual",
+        })
         engine.apply_order(game, {
+            "id": "shot",
+            "expected_turn": 0,
+            "activity": "employ",
+            "minutes": 5,
+            "interrupt_on": [],
+            "course": own["course"],
+            "speed": 5,
+            "depth": 200,
+            "operating_mode": own["operating_mode"],
+            "weapon": "exercise_heavyweight",
+            "target": "S99",
+            "basis": [report_id],
+            "confirm": True,
+        })
+        self.assertEqual(own["inventory"]["exercise_heavyweight"], 9)
+        run = state["weapon_runs"][0]
+        self.assertEqual(run["weapon"], "exercise_heavyweight")
+        self.assertTrue(run["within_patrol_authorization"])
+        self.assertEqual(run["status"], "running")
+        angle = math.radians(run["course"])
+        guide["x"] = run["x"] + math.sin(angle) * 0.55
+        guide["y"] = run["y"] + math.cos(angle) * 0.55
+        run["integrate"] = True
+
+        class Certain:
+            def u(self, label):
+                return 0.0
+
+            def between(self, label, low, high):
+                return low
+
+        starts = engine._position_snapshot(state)
+        engine.advance_weapon_runs(state, Certain(), starts, starts)
+        self.assertEqual(guide["casualty"]["effect"], "destroyed")
+        self.assertEqual(guide["casualty"]["weapon"], "exercise_heavyweight")
+        self.assertEqual(state["engagements"][-1]["outcome"], "destroyed")
+        self.assertTrue(state["engagements"][0]["within_patrol_authorization"])
+
+    def test_fire_control_allows_the_heavyweight_and_the_debrief_replays(self):
+        game = engine.initialize(f"{5:064x}", CINDER_ROAD)
+        state = game["state"]
+        own = state["own"]
+        own["depth"] = 200
+        state["ordered"]["depth"] = 200
+        guide = next(actor for actor in state["actors"] if actor["id"] == "actor-guide")
+        report_id = state["reports"][0]["id"]
+        state["tracks"].append({
+            "id": "S99",
+            "actor": guide["id"],
+            "first": 0,
+            "last": 0,
+            "evidence": {},
+            "observations": [{
+                "bearing_true": 0,
+                "range_estimate_nm": 2.0,
+                "report_id": report_id,
+                "elapsed_minutes": 0,
+            }],
+            "visual": None,
+        })
+        with self.assertRaises(ValueError) as raised:
+            engine.apply_order(game, {
+                "id": "ask",
+                "expected_turn": 0,
+                "activity": "employ",
+                "minutes": 5,
+                "interrupt_on": [],
+                "course": own["course"],
+                "speed": 5,
+                "depth": 200,
+                "operating_mode": own["operating_mode"],
+                "weapon": "exercise_heavyweight",
+                "target": "S99",
+                "basis": [report_id],
+                "confirm": False,
+            })
+        self.assertIn("authorization allows", str(raised.exception))
+        self.assertEqual(own["inventory"]["exercise_heavyweight"], 10)
+        fresh = engine.initialize(f"{5:064x}", CINDER_ROAD)
+        engine.apply_order(fresh, {
             "id": "end-cinder",
-            "expected_turn": len(game["events"]),
+            "expected_turn": 0,
             "activity": "end",
         })
-        outcomes = engine.debrief(game)["outcomes"]
-        self.assertEqual(outcomes["objective"], "convoy_attack_geometry")
-        self.assertTrue(outcomes["attack_geometry_reached"])
-        self.assertEqual(outcomes["weapon_flight"], "not resolved")
-        self.assertLessEqual(outcomes["closest_merchant_nm"], 3)
+        revealed = engine.debrief(fresh)
+        self.assertEqual(revealed["outcomes"]["objective"], "convoy")
+        self.assertEqual(revealed["outcomes"]["merchant_casualties"], [])
+        self.assertEqual(revealed["adjudication"]["decision_quality"], [])
+        self.assertEqual(revealed["verification"]["verified"], True)
 
 
 class NarratorScenarioTests(unittest.TestCase):

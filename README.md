@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.12.** The hidden-state and replay foundation
+**Status: early prototype, version 0.13.** The hidden-state and replay foundation
 works. Acoustic transmission uses a documented sound-speed profile and path
 approximations. Contact reports include measured narrowband frequencies, line
 quality and uncertainty. Own-ship reception uses separate hull, flank and towed
@@ -102,13 +102,18 @@ python -m submarine_command --session .sessions/my-patrol verify
 ```
 
 Supported activities are `listen`, `focus`, `active`, `mast`, `receive`,
-`transmit`, `retrieve`, `stream_array`, `recover_array`, `repair`, and `end`. **Every field must be stated.** The engine
+`transmit`, `retrieve`, `stream_array`, `recover_array`, `repair`, `employ`, and `end`. **Every field must be stated.** The engine
 supplies no default for any of them: an order missing `course`, `speed`,
 `depth`, `operating_mode`, `minutes`, `activity`, `interrupt_on` or
 `expected_turn` is rejected before anything changes, rather than being filled in
 from the current settings. `receive`, `transmit` and `retrieve` also require
 `link`, naming one published mode such as `mast_receive`, `mast_transmit` or
-`buoyant_receive`. An empty `interrupt_on` means no interrupt was
+`buoyant_receive`. `employ` also requires `weapon`, `target`, `basis` and `confirm`.
+`weapon` names a published inventory item, `target` is an existing contact id
+for an offensive round or `none` for a countermeasure, and `basis` lists
+existing report ids. `confirm` false is fire control asking for confirmation
+and does not launch. `confirm` true launches, including when the patrol orders
+do not authorize that weapon. A launched round then runs on later steps. An empty `interrupt_on` means no interrupt was
 selected, and an empty `basis` means the assessment cites no report. An `end`
 order takes only `id`, `expected_turn` and `activity`. Mode-specific and
 platform-wide envelopes are both validated. Orders run for 5–60 minutes in
@@ -197,7 +202,7 @@ verification. During active play, debrief refuses to reveal anything.
 
 | Area | Behavior |
 |---|---|
-| Scenarios | Glass Strait, a corridor assessment; Miller Line, a barrier watch; Cinder Road, a wartime convoy approach. Weapon flight is not resolved. Opposing traffic stays hidden |
+| Scenarios | Glass Strait, a corridor assessment; Miller Line, a barrier watch; Cinder Road, a wartime convoy attack using the published heavyweight. Opposing traffic stays hidden |
 | Hidden state | Persistent seed, fixed initial contacts, event-keyed random draws, replay verification, public-only outputs |
 | Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |
@@ -208,9 +213,9 @@ verification. During active play, debrief refuses to reveal anything.
 | Frequency change | Crew indication from successive frequencies after own-ship Doppler is removed; aspect does not change level |
 | Environment | Hidden sound-speed profile, water depth and bottom; dated onboard estimate; frequency-dependent path approximations |
 | Communications | Separate mast receive, mast transmit and buoyant receive modes; antenna state, latency, retrieval and a shared radio window |
-| Opposition | Limited-information detection and a simple evasive response |
+| Opposition | Each unit keeps its own detections, belief and doctrine. Avoid turns away from its fix. Engage may shoot at that fix. Passage does neither |
 | Resources | Diesel battery use and snorkeling recharge, vessel fuel consumption, and persistent inventories advance on the shared clock |
-| Weapons | Fictional inventories are explicit; observation-only policy and unavailable employment are distinct |
+| Weapons | A confirmed launch puts a homing round in the water. Later steps score destruction, a mobility casualty, or a dud from the round's location. Fire control asks when patrol orders do not authorize the shot |
 | Engineering | An auxiliary-noise fault and timed repair |
 | Narrator interface | Restricted local JSON-lines broker with opaque sessions and public-only operations |
 

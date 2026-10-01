@@ -1,12 +1,12 @@
 # Scenarios
 
 A scenario is a public brief plus the hidden layout drawn when the session is
-created. The published scenarios use rules version 0.12. The same order
-validation, movement, acoustic measurement, communications and replay rules
-apply. The capability report lists each public brief, clock and own-ship start.
-Glass Strait also lists its relief station. Miller Line lists the barrier line.
-Cinder Road lists the convoy lane and the attack geometry. Weapon flight is
-not resolved. The report does not list the opposing draw.
+created. The published scenarios use rules version 0.13. The same order
+validation, movement, acoustic measurement, communications, employment and
+replay rules apply. The capability report lists each public brief, clock and
+own-ship start. Glass Strait also lists its relief station. Miller Line lists
+the barrier line. Cinder Road lists the convoy lane and authorizes the
+published exercise heavyweight. The report does not list the opposing draw.
 
 ```bash
 python -m submarine_command capabilities
@@ -93,34 +93,34 @@ does not show the deep boat.
 
 ## Operation Cinder Road
 
-A wartime convoy approach. Kestrel starts at 1600 at (14 east, -11 north),
+A wartime convoy attack. Kestrel starts at 1600 at (14 east, -11 north),
 course 000, 5 knots, 350 feet, south of an eastbound lane at y=0. The patrol
 ends at 2100. There is no relief station and no barrier to hold.
 
-The scored result is attack geometry on a merchant before the guide passes
-east of x=30: range 3 nautical miles or less, own speed 8 knots or less, own
-depth between 150 and 500 feet, and the escort more than 6 nautical miles
-away. Weapon flight and damage are not resolved. A transmitted assessment is
-not an attack.
+Offensive employment is authorized. The attack is an `employ` order for the
+published exercise heavyweight: the round, an existing contact, the cited
+reports, and `confirm`. The launch envelope, run, and hit chances are that
+rule. A transmitted assessment does not launch a weapon. Glass Strait and
+Miller Line leave offensive employment unauthorized; a confirmed launch there
+is still possible and is recorded as outside the patrol orders.
 
 ### Hidden layout
 
 Two merchants hold an eastbound column at 8 knots. The escort keeps the same
-speed abeam of the guide, 5 to 6.5 nautical miles to one side. That offset is
-what makes one side of the lane meet the escort clearance and the other side
-fail it. A diesel submarine screens ahead of the column on battery and evades
-if it detects Kestrel. The shore plot says the lane and that the escort side
-is unknown. It does not give a present position.
+speed abeam of the guide, 5 to 6.5 nautical miles to one side, and fires if
+it holds a detection. A diesel submarine screens ahead of the column on
+battery and fires from its own fix. The shore plot says the lane and that the
+escort side is unknown. It does not give a present position.
 
 ### Decisions the layout supports
 
-The column will pass the opening longitude whether or not Kestrel closes. A
-slow approach can miss the window. A fast approach is louder and can be heard
-by the screen. The escort and the merchants are both surface ships; closing
-the escort does not meet attack geometry. A mast look can read a name inside
-the published visual range and is itself an approach. A mast transmission can
-be intercepted by the escort. The safe side has to be inferred from what is
-heard or seen.
+The column will pass the opening longitude whether or not Kestrel closes. The
+heavyweight envelope is shallower than the opening depth, so the boat has to
+be inside that envelope for a whole step before a round is expended. A loud
+approach can be heard by the escort or the screen, and either can shoot. A
+mast look can read a name inside the published visual range. A mast
+transmission can be intercepted by the escort. The escort's side has to be
+inferred from what is heard or seen.
 
 ## Debrief
 
@@ -131,7 +131,9 @@ Kestrel, and any recorded radio intercepts. Miller Line reports whether the
 submerged boat crossed, the crossing minute, whether an acoustic observation
 of that boat exists at or before that minute, whether the only observations
 are later, whether Kestrel went east of the line, and whether the crossing
-boat detected Kestrel. Cinder Road reports whether attack geometry was reached,
-when, whether the convoy had already passed the exit line, the closest true
-range to a merchant, and whether the screening submarine detected Kestrel.
-It does not report a weapon hit.
+boat detected Kestrel. Cinder Road reports merchant casualties, whether the
+convoy had passed the exit line, the closest true range to a merchant, and
+whether the escort or the screen detected Kestrel. Every scenario's debrief
+also keeps the weapon log, casualties, and opposition beliefs. The
+adjudication keeps the order's cited reports, the location draws, and engine
+errors apart.

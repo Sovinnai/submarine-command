@@ -1,11 +1,10 @@
 """Published patrol scenarios.
 
 A scenario is the captain's brief plus the hidden layout drawn at
-initialization. Movement, acoustics, communications and order validation stay
-on rules version 0.12. Glass Strait is a corridor assessment with a relief
-station. Miller Line is a barrier watch. Cinder Road is a wartime convoy
-approach. Weapon flight is not resolved. Opposing specifications stay out of
-the public brief.
+initialization. Movement, acoustics, communications, employment and order
+validation stay on rules version 0.13. Glass Strait is a corridor assessment
+with a relief station. Miller Line is a barrier watch. Cinder Road is a
+wartime convoy attack. Opposing specifications stay out of the public brief.
 """
 from .platforms import BIOLOGIC, DART, FISHER, KESTREL, MERCHANT, WARSHIP
 
@@ -109,7 +108,7 @@ class Schedule:
 
 class Scenario:
     def __init__(self, identifier, mission, schedule, own_start, place, navigation_text,
-                 geometry=None):
+                 geometry=None, offensive_weapons=False):
         self.identifier = identifier
         self.mission = mission
         self.schedule = schedule
@@ -117,6 +116,7 @@ class Scenario:
         self.place = place
         self.navigation_text = navigation_text
         self.geometry = geometry
+        self.offensive_weapons = offensive_weapons
 
     def public_entry(self):
         start = self.own_start
@@ -128,7 +128,7 @@ class Scenario:
             clock["assessment_deadline_minutes"] = self.schedule.report_due_minutes
         entry = {
             "id": self.identifier,
-            "rules_version": "0.12",
+            "rules_version": "0.13",
             "mission": dict(self.mission),
             "clock": clock,
             "own_ship_start": {
@@ -194,6 +194,9 @@ def _place_glass(state, dice, make_entity):
         last_heard=None,
         evaded=False,
         name=dice.choose("initial:a-name", ["Cormorant", "Morrow", "Solace"]),
+        doctrine="avoid" if kind == "submerged" else "passage",
+        observations=[],
+        belief={"assessment": "no_contact"},
         intent=(
             "Transit east through the passage; avoid an observer if one is detected."
             if kind == "submerged"
@@ -225,6 +228,9 @@ def _place_glass(state, dice, make_entity):
                 last_heard=None,
                 evaded=False,
                 name=name,
+                doctrine="passage",
+                observations=[],
+                belief={"assessment": "no_contact"},
                 intent="Maintain an established westbound passage.",
             )
         )
@@ -280,6 +286,9 @@ def _place_miller(state, dice, make_entity):
         last_heard=None,
         evaded=False,
         name="Wicket",
+        doctrine="avoid",
+        observations=[],
+        belief={"assessment": "no_contact"},
         intent="Cross the line on the initial course. Evade if an observer is detected.",
     )
     state["actors"].append(diesel)
@@ -296,6 +305,9 @@ def _place_miller(state, dice, make_entity):
         last_heard=None,
         evaded=False,
         name="Trestle",
+        doctrine="passage",
+        observations=[],
+        belief={"assessment": "no_contact"},
         intent="Cross the line on the initial course and continue west.",
     ))
     state["actors"].append(make_entity(
@@ -310,6 +322,9 @@ def _place_miller(state, dice, make_entity):
         last_heard=None,
         evaded=False,
         name="Murmur",
+        doctrine="passage",
+        observations=[],
+        belief={"assessment": "no_contact"},
         intent="Remain near the center of the line and cycle vocalization.",
     ))
     patrol_north = dice.u("miller:warship-direction") < 0.5
@@ -325,6 +340,9 @@ def _place_miller(state, dice, make_entity):
         last_heard=None,
         evaded=False,
         name="Picket",
+        doctrine="passage",
+        observations=[],
+        belief={"assessment": "no_contact"},
         intent="Patrol north or south on the east side of the line. Do not cross it.",
     ))
     state["barrier"] = {
@@ -370,10 +388,8 @@ CINDER_MISSION = {
         "This is not an exercise classification and not a barrier watch."
     ),
     "task": (
-        "Reach attack geometry on a merchant in the convoy before the guide "
-        "passes east of x=30. Attack geometry is 3 nautical miles or closer, "
-        "own speed 8 knots or less, own depth 150 to 500 feet, and the escort "
-        "more than 6 nautical miles away. Weapon flight and damage are not resolved."
+        "Attack a merchant in the convoy with the published exercise heavyweight "
+        "before the guide passes east of x=30. The patrol ends at 2100."
     ),
     "chart": (
         "Local grid in nautical miles: east is +x, north is +y. "
@@ -382,13 +398,15 @@ CINDER_MISSION = {
         "The lane is not a change in bathymetry."
     ),
     "orders": (
-        "Close a merchant on the safe side of the escort, or let the convoy pass. "
-        "No weapon or countermeasure can be employed. "
+        "Offensive employment is authorized. An employ order still names the "
+        "round, an existing contact, the cited reports, and confirm. "
+        "The launch uses that round's published envelope. "
         "There is no relief station."
     ),
     "intel": (
         "The convoy is eastbound on the lane. The escort's side of the column is not known. "
         "A submarine may be screening ahead of the column. "
+        "The escort and that submarine fire if they hold a detection. "
         "A shore plot does not give a present position."
     ),
     "radio": (
@@ -396,25 +414,16 @@ CINDER_MISSION = {
         "A mast receive can copy one once its scheduled time has passed. "
         "A buoyant receive adds that mode's published delivery latency. "
         "A mast transmission can be intercepted by the escort inside the published range. "
-        "Sending an assessment does not attack the convoy."
+        "Sending an assessment does not launch a weapon."
     ),
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
     "simplifications": (
-        "Merchants and the escort hold course and speed. "
-        "The screening submarine holds course unless it detects Kestrel, then it evades once from its own fix. "
-        "Attack geometry is recorded from true range at a five-minute step. "
-        "The engine does not launch a weapon, resolve a hit, or apply damage. "
-        "A mast sighting inside the published visual range can read a name. It is not an attack."
+        "Merchants hold course and speed until a weapon casualty stops them. "
+        "The escort holds station unless it fires or a casualty stops it. "
+        "The screening submarine fires under an engage doctrine from its own fix and does not also evade. "
+        "A homing round then runs under the published employment rule. "
+        "A mast sighting inside the published visual range can read a name."
     ),
-}
-
-CINDER_ENGAGEMENT = {
-    "exercise": "Wartime patrol. Weapon flight and damage are not resolved.",
-    "rules_of_engagement": (
-        "Attack geometry on a merchant is the scored result. "
-        "Weapon and countermeasure employment is not available."
-    ),
-    "employment_available": False,
 }
 
 MILLER_SCHEDULE = Schedule(
@@ -468,8 +477,8 @@ def _place_cinder(state, dice, make_entity):
     """Hidden wartime convoy.
 
     Two merchants hold an eastbound column on the lane. The escort is abeam
-    on one side, far enough that attack geometry is possible from the other
-    side and not from the escort's side. A diesel screens ahead on battery.
+    on one side and fires if it holds a detection. A diesel screens ahead on
+    battery and fires under the same doctrine.
     """
     guide_x = dice.between("cinder:guide-x", -8, -4)
     guide_y = dice.between("cinder:guide-y", -0.5, 0.5)
@@ -485,6 +494,9 @@ def _place_cinder(state, dice, make_entity):
         last_heard=None,
         evaded=False,
         name="Hasp",
+        doctrine="passage",
+        observations=[],
+        belief={"assessment": "no_contact"},
         intent="Hold the eastbound lane at the column speed.",
     )
     trailer = make_entity(
@@ -499,6 +511,9 @@ def _place_cinder(state, dice, make_entity):
         last_heard=None,
         evaded=False,
         name="Lanyard",
+        doctrine="passage",
+        observations=[],
+        belief={"assessment": "no_contact"},
         intent="Follow the guide at the column speed.",
     )
     side = 1.0 if dice.u("cinder:escort-side") < 0.5 else -1.0
@@ -514,7 +529,10 @@ def _place_cinder(state, dice, make_entity):
         last_heard=None,
         evaded=False,
         name="Brand",
-        intent="Stay abeam of the guide on the assigned side.",
+        doctrine="engage",
+        observations=[],
+        belief={"assessment": "no_contact"},
+        intent="Stay abeam of the guide. Fire at a held detection.",
     )
     screen = make_entity(
         DART,
@@ -528,25 +546,20 @@ def _place_cinder(state, dice, make_entity):
         last_heard=None,
         evaded=False,
         name="Mote",
-        intent="Screen ahead of the column. Evade if an observer is detected.",
+        doctrine="engage",
+        observations=[],
+        belief={"assessment": "no_contact"},
+        intent="Screen ahead of the column. Fire at a held detection.",
     )
     state["actors"].extend((guide, trailer, escort, screen))
-    state["engagement"] = dict(CINDER_ENGAGEMENT)
     state["convoy"] = {
         "lane_north_nm": 0.0,
         "lane_course_true": 90.0,
-        "attack_range_nm": 3.0,
-        "attack_maximum_speed_knots": 8.0,
-        "attack_minimum_depth_feet": 150.0,
-        "attack_maximum_depth_feet": 500.0,
-        "escort_clear_nm": 6.0,
         "exit_east_nm": 30.0,
         "guide_id": guide["id"],
         "merchant_ids": [guide["id"], trailer["id"]],
         "escort_id": escort["id"],
         "screen_id": screen["id"],
-        "achieved": False,
-        "attack_elapsed_minutes": None,
         "exit_elapsed_minutes": None,
         "closest_merchant_nm": None,
     }
@@ -564,9 +577,9 @@ def _place_cinder(state, dice, make_entity):
             "id": "OPS-1830",
             "available": 150,
             "text": (
-                "1830 operations update: attack geometry is still required "
-                "before the guide passes east of x=30. Weapon flight is not "
-                "resolved. There is no relief station."
+                "1830 operations update: the exercise heavyweight remains the "
+                "authorized attack on a merchant before the guide passes east "
+                "of x=30. There is no relief station."
             ),
         },
     ]
@@ -623,17 +636,14 @@ SCENARIOS = {
         _place_cinder,
         _cinder_navigation,
         geometry={
-            "type": "convoy_attack_geometry",
+            "type": "convoy",
             "lane_north_nm": 0.0,
             "lane_course_true": 90.0,
-            "attack_range_nm": 3.0,
-            "attack_maximum_speed_knots": 8.0,
-            "attack_minimum_depth_feet": 150.0,
-            "attack_maximum_depth_feet": 500.0,
-            "escort_clear_nm": 6.0,
             "convoy_exit_east_nm": 30.0,
-            "weapon_flight": "not resolved",
+            "offensive_weapons_authorized": True,
+            "employment": "exercise_heavyweight",
         },
+        offensive_weapons=True,
     ),
 }
 
