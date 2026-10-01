@@ -43,7 +43,8 @@ to the east. North sector is y>0. South sector is y<0. The watch ends at 0700
 wherever the boat is. Nothing in the brief assigns a relief station.
 
 The assigned result is an acoustic detection of the submerged boat at or before
-the minute it crosses the line. A surface ship crossing the line does not
+the minute it crosses the published segment. A passage of the meridian outside
+y=-18 to y=+18 is not that crossing. A surface ship crossing the line does not
 finish the watch. A detection made only after the crossing, a mast sighting,
 and a transmitted presence assessment are not that result. Kestrel may cross to
 the east side; the debrief records that it left the assigned side. Weapons
@@ -60,9 +61,10 @@ latitude.
 
 - A diesel submarine starts east of the line, at least 6 nautical miles north
   or south of the center, on a westbound course. If it keeps that course and
-  speed it crosses during the watch, and it crosses later than the merchant.
-  It does not snorkel on this charge. If it detects Kestrel it evades once
-  from its own fix, which can spoil the crossing.
+  speed it reaches the meridian during the watch, later than the merchant.
+  The scored crossing is that passage only when the latitude is on the
+  published segment. It does not snorkel on this charge. If it detects
+  Kestrel it evades once from its own fix, which can spoil the crossing.
 - A merchant starts closer to the line, in the opposite sector, and crosses
   first. It is a real ship, not a false plot.
 - A biologic group starts near the center of the line and keeps its published

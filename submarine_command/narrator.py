@@ -132,7 +132,10 @@ class SessionStore:
         }
 
     def start(self, idempotency_key, scenario=None):
-        if scenario is not None and scenario not in engine.published_scenario_ids():
+        if scenario is not None and (
+            not isinstance(scenario, str)
+            or scenario not in engine.published_scenario_ids()
+        ):
             raise NarratorError(
                 "invalid_request",
                 "start scenario must name a published scenario.",

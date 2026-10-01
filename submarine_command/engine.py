@@ -832,8 +832,8 @@ def _acoustic_belief(state, actor, dice, active):
     )
     if dice.u(f"opponent-hears:{actor['id']}:{t}") >= probability:
         return
-    fix_x = own["x"] + dice.between(f"opponent-fix-x:{t}", -2, 2)
-    fix_y = own["y"] + dice.between(f"opponent-fix-y:{t}", -2, 2)
+    fix_x = own["x"] + dice.between(f"opponent-fix-x:{actor['id']}:{t}", -2, 2)
+    fix_y = own["y"] + dice.between(f"opponent-fix-y:{actor['id']}:{t}", -2, 2)
     source = "acoustic"
     decoy = _active_decoy(state)
     if decoy is not None:
@@ -2264,6 +2264,20 @@ def capability_report():
     return result
 
 
+def _latitude_at_meridian(actor, line_x):
+    """Latitude where this step's track meets the meridian, if it crosses west."""
+    step_nm = actor["speed"] * TICK / 60
+    angle = math.radians(actor["course"])
+    prev_x = actor["x"] - math.sin(angle) * step_nm
+    prev_y = actor["y"] - math.cos(angle) * step_nm
+    if prev_x <= line_x or actor["x"] > line_x:
+        return None
+    span = actor["x"] - prev_x
+    fraction = 0.0 if abs(span) < 1e-12 else (line_x - prev_x) / span
+    fraction = min(1.0, max(0.0, fraction))
+    return prev_y + (actor["y"] - prev_y) * fraction
+
+
 def update_barrier(state):
     """Record a barrier crossing after movement. No random draw."""
     barrier = state.get("barrier")
@@ -2276,7 +2290,10 @@ def update_barrier(state):
     crosser = next(
         actor for actor in state["actors"] if actor["id"] == barrier["crosser_id"]
     )
-    if crosser["x"] <= barrier["line_x"]:
+    latitude = _latitude_at_meridian(crosser, barrier["line_x"])
+    if latitude is None:
+        return
+    if barrier["south_y"] <= latitude <= barrier["north_y"]:
         barrier["crossed"] = True
         barrier["crossing_elapsed_minutes"] = state["t"]
 

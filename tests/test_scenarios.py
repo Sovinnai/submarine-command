@@ -189,6 +189,18 @@ class MillerLineTests(unittest.TestCase):
             for report in game["state"]["reports"]
         ))
 
+    def test_a_meridian_passage_outside_the_segment_is_not_a_crossing(self):
+        game = engine.initialize(f"{49:064x}", MILLER_LINE)
+        while not game["state"]["ended"]:
+            engine.apply_order(game, hold_order(game))
+        crosser = next(
+            actor for actor in game["state"]["actors"] if actor["id"] == "actor-crosser"
+        )
+        self.assertLessEqual(crosser["x"], 0)
+        outcomes = engine.debrief(game)["outcomes"]
+        self.assertFalse(outcomes["crossed_the_line"])
+        self.assertIsNone(outcomes["crossing_elapsed_minutes"])
+
     def test_cli_rejects_an_unknown_scenario_without_creating_a_save(self):
         with tempfile.TemporaryDirectory() as folder:
             session = Path(folder) / "patrol"
@@ -219,6 +231,8 @@ class CinderRoadTests(unittest.TestCase):
         self.assertEqual(public["own_ship"]["inventory"]["wartime_heavyweight"], 10)
         self.assertEqual(public["own_ship"]["inventory"]["exercise_heavyweight"], 0)
         self.assertIn("wartime heavyweight", public["mission"]["task"])
+        self.assertIn("may be screening", public["mission"]["intel"])
+        self.assertNotIn("engage", json.dumps(public["mission"]))
         self.assertTrue(public["own_ship"]["authorization"]["offensive_weapons"])
         self.assertIn("authorized", public["own_ship"]["restrictions"]["exercise"])
         glass = engine.public_view(engine.initialize(f"{0:064x}"))
@@ -387,6 +401,34 @@ class CinderRoadTests(unittest.TestCase):
         self.assertEqual(revealed["outcomes"]["merchant_casualties"], [])
         self.assertEqual(revealed["adjudication"]["decision_quality"], [])
         self.assertEqual(revealed["verification"]["verified"], True)
+        self.assertIsNotNone(revealed["outcomes"]["closest_merchant_nm"])
+        guide = next(actor for actor in fresh["state"]["actors"] if actor["id"] == "actor-guide")
+        trailer = next(actor for actor in fresh["state"]["actors"] if actor["id"] == "actor-trailer")
+        own = fresh["state"]["own"]
+        opening = min(
+            math.hypot(own["x"] - guide["x"], own["y"] - guide["y"]),
+            math.hypot(own["x"] - trailer["x"], own["y"] - trailer["y"]),
+        )
+        self.assertEqual(revealed["outcomes"]["closest_merchant_nm"], round(opening, 2))
+
+    def test_escort_and_screen_draw_separate_fixes(self):
+        from unittest import mock
+        from submarine_command import acoustics
+        game = engine.initialize(f"{3:064x}", CINDER_ROAD)
+        state = game["state"]
+        escort = next(actor for actor in state["actors"] if actor["id"] == "actor-escort")
+        screen = next(actor for actor in state["actors"] if actor["id"] == "actor-screen")
+        dice = engine.Dice(game["seed"], [])
+        with mock.patch.object(acoustics, "detection_probability", return_value=1):
+            engine._acoustic_belief(state, escort, dice, False)
+            engine._acoustic_belief(state, screen, dice, False)
+        labels = [entry["event"] for entry in dice.trace]
+        self.assertIn("opponent-fix-x:actor-escort:0", labels)
+        self.assertIn("opponent-fix-x:actor-screen:0", labels)
+        self.assertNotEqual(
+            (escort["last_heard"]["x"], escort["last_heard"]["y"]),
+            (screen["last_heard"]["x"], screen["last_heard"]["y"]),
+        )
 
 
 class NarratorScenarioTests(unittest.TestCase):
@@ -411,3 +453,14 @@ class NarratorScenarioTests(unittest.TestCase):
             self.assertFalse(response["ok"])
             self.assertEqual(response["error"]["code"], "invalid_request")
             self.assertTrue(response["error"]["action_not_committed"])
+            malformed = json.dumps({
+                "v": 1,
+                "request_id": "scenario-type",
+                "op": "start",
+                "params": {"idempotency_key": "d4" * 16, "scenario": ["cinder-road"]},
+            }).encode()
+            before = set(Path(folder).iterdir())
+            response = narrator.dispatch(store, malformed)
+            self.assertFalse(response["ok"])
+            self.assertEqual(response["error"]["code"], "invalid_request")
+            self.assertEqual(set(Path(folder).iterdir()), before)

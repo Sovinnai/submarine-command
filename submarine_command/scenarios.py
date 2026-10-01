@@ -6,6 +6,8 @@ validation stay on rules version 0.14. Glass Strait is a corridor assessment
 with a relief station. Miller Line is a barrier watch. Cinder Road is a
 wartime convoy attack. Opposing specifications stay out of the public brief.
 """
+import math
+
 from .platforms import BIOLOGIC, DART, FISHER, KESTREL, MERCHANT, WARSHIP
 
 GLASS_STRAIT = "glass-strait"
@@ -409,7 +411,7 @@ CINDER_MISSION = {
     "intel": (
         "The convoy is eastbound on the lane. The escort's side of the column is not known. "
         "A submarine may be screening ahead of the column. "
-        "The escort and that submarine fire if they hold a detection. "
+        "A ship that holds a detection may fire from that detection. "
         "A shore plot does not give a present position."
     ),
     "radio": (
@@ -423,7 +425,6 @@ CINDER_MISSION = {
     "simplifications": (
         "Merchants hold course and speed until a weapon casualty stops them. "
         "The escort holds station unless it fires or a casualty stops it. "
-        "The screening submarine fires under an engage doctrine from its own fix and does not also evade. "
         "A homing round then runs under the published employment rule. "
         "A mast sighting inside the published visual range can read a name."
     ),
@@ -564,7 +565,10 @@ def _place_cinder(state, dice, make_entity):
         "escort_id": escort["id"],
         "screen_id": screen["id"],
         "exit_elapsed_minutes": None,
-        "closest_merchant_nm": None,
+        "closest_merchant_nm": min(
+            math.hypot(state["own"]["x"] - merchant["x"], state["own"]["y"] - merchant["y"])
+            for merchant in (guide, trailer)
+        ),
     }
     state["bulletins"] = [
         {
