@@ -43,7 +43,7 @@ from .scenarios import (
     require_scenario,
 )
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 TICK = 5
 MANEUVER_STEP = 1
 # Glass Strait clock. Scenario state carries the patrol's own schedule.
@@ -301,6 +301,18 @@ def steady_text(state):
     own = state["own"]
     return (f"Steady on ordered course {own['course']:03.0f}, speed {own['speed']:.1f} knots, "
             f"depth {own['depth']:.0f} feet, {own['operating_mode']} mode.")
+
+
+OFFENSIVE_ROUNDS = ("exercise_heavyweight", "wartime_heavyweight")
+
+
+def _set_offensive_loadout(own, loaded):
+    """Put one heavyweight aboard. The other tube count is zero."""
+    if loaded not in OFFENSIVE_ROUNDS:
+        raise ValueError(f"Unknown offensive loadout {loaded!r}.")
+    quantities = {item.identifier: item.quantity for item in KESTREL.weapons}
+    for identifier in OFFENSIVE_ROUNDS:
+        own["inventory"][identifier] = quantities[identifier] if identifier == loaded else 0
 
 
 def entity_spec(entity):
@@ -661,6 +673,7 @@ def new_world(seed, scenario=GLASS_STRAIT):
              "looks": [],
              "ended": False, "end_reason": None, "deadline_announced": False,
              "maneuvering": False, "last_action_report_start": 0}
+    _set_offensive_loadout(state["own"], selected.offensive_loadout)
     dice = Dice(seed, state["rng_trace"])
     state["environment"] = acoustics.initialize_environment(dice)
     state["bearing_bias"] = dice.between(

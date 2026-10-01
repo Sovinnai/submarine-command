@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.13.** The hidden-state and replay foundation
+**Status: early prototype, version 0.14.** The hidden-state and replay foundation
 works. Acoustic transmission uses a documented sound-speed profile and path
 approximations. Contact reports include measured narrowband frequencies, line
 quality and uncertainty. Own-ship reception uses separate hull, flank and towed
@@ -202,7 +202,7 @@ verification. During active play, debrief refuses to reveal anything.
 
 | Area | Behavior |
 |---|---|
-| Scenarios | Glass Strait, a corridor assessment; Miller Line, a barrier watch; Cinder Road, a wartime convoy attack using the published heavyweight. Opposing traffic stays hidden |
+| Scenarios | Glass Strait, a corridor assessment; Miller Line, a barrier watch; Cinder Road, a wartime convoy attack with the wartime heavyweight aboard. Opposing traffic stays hidden |
 | Hidden state | Persistent seed, fixed initial contacts, event-keyed random draws, replay verification, public-only outputs |
 | Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |

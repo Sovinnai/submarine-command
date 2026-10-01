@@ -67,6 +67,8 @@ class GlassStraitRegressionTests(unittest.TestCase):
         public = engine.public_view(game)
         self.assertEqual(public["scenario"], "glass-strait")
         self.assertEqual(public["game"], "Operation Glass Strait")
+        self.assertEqual(public["own_ship"]["inventory"]["exercise_heavyweight"], 10)
+        self.assertEqual(public["own_ship"]["inventory"]["wartime_heavyweight"], 0)
         self.assertEqual(public["navigation"]["relief_station"], "RELIEF")
         self.assertEqual(public["navigation"]["relief_distance_nm"], 24)
         self.assertNotIn("simplifications", public["mission"])
@@ -214,6 +216,9 @@ class CinderRoadTests(unittest.TestCase):
         self.assertEqual(public["navigation"]["convoy_exit_east_nm"], 30)
         self.assertNotIn("attack_range_nm", public["navigation"])
         self.assertNotIn("relief_station", public["navigation"])
+        self.assertEqual(public["own_ship"]["inventory"]["wartime_heavyweight"], 10)
+        self.assertEqual(public["own_ship"]["inventory"]["exercise_heavyweight"], 0)
+        self.assertIn("wartime heavyweight", public["mission"]["task"])
         self.assertTrue(public["own_ship"]["authorization"]["offensive_weapons"])
         self.assertIn("authorized", public["own_ship"]["restrictions"]["exercise"])
         glass = engine.public_view(engine.initialize(f"{0:064x}"))
@@ -300,14 +305,15 @@ class CinderRoadTests(unittest.TestCase):
             "speed": 5,
             "depth": 200,
             "operating_mode": own["operating_mode"],
-            "weapon": "exercise_heavyweight",
+            "weapon": "wartime_heavyweight",
             "target": "S99",
             "basis": [report_id],
             "confirm": True,
         })
-        self.assertEqual(own["inventory"]["exercise_heavyweight"], 9)
+        self.assertEqual(own["inventory"]["wartime_heavyweight"], 9)
+        self.assertEqual(own["inventory"]["exercise_heavyweight"], 0)
         run = state["weapon_runs"][0]
-        self.assertEqual(run["weapon"], "exercise_heavyweight")
+        self.assertEqual(run["weapon"], "wartime_heavyweight")
         self.assertTrue(run["within_patrol_authorization"])
         self.assertEqual(run["status"], "running")
         angle = math.radians(run["course"])
@@ -325,7 +331,7 @@ class CinderRoadTests(unittest.TestCase):
         starts = engine._position_snapshot(state)
         engine.advance_weapon_runs(state, Certain(), starts, starts)
         self.assertEqual(guide["casualty"]["effect"], "destroyed")
-        self.assertEqual(guide["casualty"]["weapon"], "exercise_heavyweight")
+        self.assertEqual(guide["casualty"]["weapon"], "wartime_heavyweight")
         self.assertEqual(state["engagements"][-1]["outcome"], "destroyed")
         self.assertTrue(state["engagements"][0]["within_patrol_authorization"])
 
@@ -362,13 +368,14 @@ class CinderRoadTests(unittest.TestCase):
                 "speed": 5,
                 "depth": 200,
                 "operating_mode": own["operating_mode"],
-                "weapon": "exercise_heavyweight",
+                "weapon": "wartime_heavyweight",
                 "target": "S99",
                 "basis": [report_id],
                 "confirm": False,
             })
         self.assertIn("authorization allows", str(raised.exception))
-        self.assertEqual(own["inventory"]["exercise_heavyweight"], 10)
+        self.assertEqual(own["inventory"]["wartime_heavyweight"], 10)
+        self.assertEqual(own["inventory"]["exercise_heavyweight"], 0)
         fresh = engine.initialize(f"{5:064x}", CINDER_ROAD)
         engine.apply_order(fresh, {
             "id": "end-cinder",

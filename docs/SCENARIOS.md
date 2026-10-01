@@ -1,12 +1,12 @@
 # Scenarios
 
 A scenario is a public brief plus the hidden layout drawn when the session is
-created. The published scenarios use rules version 0.13. The same order
+created. The published scenarios use rules version 0.14. The same order
 validation, movement, acoustic measurement, communications, employment and
 replay rules apply. The capability report lists each public brief, clock and
 own-ship start. Glass Strait also lists its relief station. Miller Line lists
-the barrier line. Cinder Road lists the convoy lane and authorizes the
-published exercise heavyweight. The report does not list the opposing draw.
+the barrier line. Cinder Road lists the convoy lane and loads the wartime
+heavyweight. The report does not list the opposing draw.
 
 ```bash
 python -m submarine_command capabilities
@@ -97,12 +97,14 @@ A wartime convoy attack. Kestrel starts at 1600 at (14 east, -11 north),
 course 000, 5 knots, 350 feet, south of an eastbound lane at y=0. The patrol
 ends at 2100. There is no relief station and no barrier to hold.
 
-Offensive employment is authorized. The attack is an `employ` order for the
-published exercise heavyweight: the round, an existing contact, the cited
-reports, and `confirm`. The launch envelope, run, and hit chances are that
-rule. A transmitted assessment does not launch a weapon. Glass Strait and
-Miller Line leave offensive employment unauthorized; a confirmed launch there
-is still possible and is recorded as outside the patrol orders.
+Offensive employment is authorized. The tubes carry the wartime heavyweight.
+The exercise round is not loaded. The attack is an `employ` order for
+`wartime_heavyweight`: the round, an existing contact, the cited reports, and
+`confirm`. That round uses the same published homing run as the exercise
+heavyweight. A transmitted assessment does not launch a weapon. Glass Strait
+and Miller Line load the exercise round and leave offensive employment
+unauthorized; a confirmed launch there is still possible and is recorded as
+outside the patrol orders.
 
 ### Hidden layout
 

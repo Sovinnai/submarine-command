@@ -2,7 +2,7 @@
 
 A scenario is the captain's brief plus the hidden layout drawn at
 initialization. Movement, acoustics, communications, employment and order
-validation stay on rules version 0.13. Glass Strait is a corridor assessment
+validation stay on rules version 0.14. Glass Strait is a corridor assessment
 with a relief station. Miller Line is a barrier watch. Cinder Road is a
 wartime convoy attack. Opposing specifications stay out of the public brief.
 """
@@ -108,7 +108,8 @@ class Schedule:
 
 class Scenario:
     def __init__(self, identifier, mission, schedule, own_start, place, navigation_text,
-                 geometry=None, offensive_weapons=False):
+                 geometry=None, offensive_weapons=False,
+                 offensive_loadout="exercise_heavyweight"):
         self.identifier = identifier
         self.mission = mission
         self.schedule = schedule
@@ -117,6 +118,7 @@ class Scenario:
         self.navigation_text = navigation_text
         self.geometry = geometry
         self.offensive_weapons = offensive_weapons
+        self.offensive_loadout = offensive_loadout
 
     def public_entry(self):
         start = self.own_start
@@ -128,7 +130,8 @@ class Scenario:
             clock["assessment_deadline_minutes"] = self.schedule.report_due_minutes
         entry = {
             "id": self.identifier,
-            "rules_version": "0.13",
+            "rules_version": "0.14",
+            "offensive_loadout": self.offensive_loadout,
             "mission": dict(self.mission),
             "clock": clock,
             "own_ship_start": {
@@ -388,7 +391,7 @@ CINDER_MISSION = {
         "This is not an exercise classification and not a barrier watch."
     ),
     "task": (
-        "Attack a merchant in the convoy with the published exercise heavyweight "
+        "Attack a merchant in the convoy with the wartime heavyweight "
         "before the guide passes east of x=30. The patrol ends at 2100."
     ),
     "chart": (
@@ -577,9 +580,10 @@ def _place_cinder(state, dice, make_entity):
             "id": "OPS-1830",
             "available": 150,
             "text": (
-                "1830 operations update: the exercise heavyweight remains the "
+                "1830 operations update: the wartime heavyweight remains the "
                 "authorized attack on a merchant before the guide passes east "
-                "of x=30. There is no relief station."
+                "of x=30. The exercise round is not loaded. There is no relief "
+                "station."
             ),
         },
     ]
@@ -641,9 +645,10 @@ SCENARIOS = {
             "lane_course_true": 90.0,
             "convoy_exit_east_nm": 30.0,
             "offensive_weapons_authorized": True,
-            "employment": "exercise_heavyweight",
+            "employment": "wartime_heavyweight",
         },
         offensive_weapons=True,
+        offensive_loadout="wartime_heavyweight",
     ),
 }
 
