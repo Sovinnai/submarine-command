@@ -11,6 +11,11 @@ from submarine_command.platforms import DART, KESTREL, WARSHIP
 class WeaponRuleTests(unittest.TestCase):
     def test_terminal_chances_follow_the_rounds_location(self):
         rule = KESTREL.employment("exercise_heavyweight")
+        wartime = KESTREL.employment("wartime_heavyweight")
+        exercise_public = rule.public_definition()
+        wartime_public = wartime.public_definition()
+        wartime_public["id"] = exercise_public["id"]
+        self.assertEqual(wartime_public, exercise_public)
         near = engine.terminal_probabilities(
             0.0,
             effect_radius_nm=rule.lethal_radius_nm,

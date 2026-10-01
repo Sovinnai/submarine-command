@@ -5,7 +5,7 @@ and biologics share geometry, motion, operating modes and acoustic signatures.
 Only entities that actually carry equipment or consumable resources define
 those components.
 """
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import Enum
 
 from .acoustics import capability_environment
@@ -518,6 +518,11 @@ class EntitySpec:
                         "confirmation and does not launch. confirm true launches, "
                         "including when the patrol orders do not authorize it."
                     ),
+                    "patrol_loadout": (
+                        "A patrol loads one heavyweight. An observation patrol "
+                        "loads the exercise round. A wartime patrol loads the "
+                        "wartime round. The other count is zero."
+                    ),
                     "own_ship_source_level_change": False,
                     "inventory": [
                         self._published_inventory(item) for item in self.weapons
@@ -613,6 +618,29 @@ class EntitySpec:
 
 
 _KESTREL_MAST = MastEnvelope(60, 80, 8)
+
+# One homing model. The patrol loadout chooses which round is aboard.
+_EXERCISE_HEAVYWEIGHT = EmploymentRule(
+    identifier="exercise_heavyweight",
+    kind=EmploymentKind.OFFENSIVE,
+    effect=EmploymentEffect.HOMING_RUN,
+    cycle_minutes=5,
+    minimum_depth_feet=150,
+    maximum_depth_feet=250,
+    maximum_speed_knots=10,
+    minimum_range_nm=0.5,
+    maximum_range_nm=6.0,
+    base_probability=0.0,
+    range_bonus=0.0,
+    lethal_radius_nm=0.50,
+    effect_minutes=0,
+    run_speed_knots=36,
+    seeker_range_nm=1.2,
+    destruction_radius_nm=0.15,
+    destruction_probability=0.75,
+    mobility_probability=0.40,
+    dud_probability=0.08,
+)
 
 
 def _mast_link(envelope, **kwargs):
@@ -746,33 +774,20 @@ KESTREL = EntitySpec(
             10,
             True,
         ),
+        InventoryItem(
+            "wartime_heavyweight",
+            "Fictional wartime heavyweight round.",
+            10,
+            True,
+        ),
     ),
     countermeasures=(
         InventoryItem("mobile_decoy", "Fictional mobile acoustic decoy.", 6, True),
         InventoryItem("noise_maker", "Fictional expendable noise maker.", 12, True),
     ),
     employment_rules=(
-        EmploymentRule(
-            identifier="exercise_heavyweight",
-            kind=EmploymentKind.OFFENSIVE,
-            effect=EmploymentEffect.HOMING_RUN,
-            cycle_minutes=5,
-            minimum_depth_feet=150,
-            maximum_depth_feet=250,
-            maximum_speed_knots=10,
-            minimum_range_nm=0.5,
-            maximum_range_nm=6.0,
-            base_probability=0.0,
-            range_bonus=0.0,
-            lethal_radius_nm=0.50,
-            effect_minutes=0,
-            run_speed_knots=36,
-            seeker_range_nm=1.2,
-            destruction_radius_nm=0.15,
-            destruction_probability=0.75,
-            mobility_probability=0.40,
-            dud_probability=0.08,
-        ),
+        _EXERCISE_HEAVYWEIGHT,
+        replace(_EXERCISE_HEAVYWEIGHT, identifier="wartime_heavyweight"),
         EmploymentRule(
             identifier="mobile_decoy",
             kind=EmploymentKind.COUNTERMEASURE,

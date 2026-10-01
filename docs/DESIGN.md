@@ -11,6 +11,10 @@ orders without a reaction-time penalty.
 This is the design contract. The README and capability report describe what the
 current prototype implements; GitHub issues track implementation work.
 
+A session is one published scenario. The scenario supplies the public brief,
+the clock, its assigned station or geometry, and the hidden initial layout.
+Resolution uses the rules in this document. See [Scenarios](SCENARIOS.md).
+
 ## Command and resolution
 
 The captain chooses intent, actions, a duration and interrupt conditions. All
@@ -199,8 +203,11 @@ physical gates are an employment rule, the ordered depth and speed, and a
 round remaining. Patrol authorization is what fire control reads back. With
 confirm false, fire control asks for confirmation and nothing is expended.
 With confirm true, the round launches even when the patrol orders do not
-authorize it. Glass Strait authorizes countermeasures and does not authorize
-offensive weapons.
+authorize it. Glass Strait and Miller Line authorize countermeasures and do
+not authorize offensive weapons, and they load the exercise heavyweight.
+Rules version 0.14 gives Cinder Road the wartime heavyweight instead. The
+two rounds share one homing run. A patrol loads one of them, and the other
+count is zero.
 
 An offensive round enters the water on the bearing and range of the shooter's
 evidence, then runs at its published speed. Each minute it can steer toward a

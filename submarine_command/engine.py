@@ -29,37 +29,27 @@ from .observations import (
     target_motion_estimate,
 )
 from .platforms import (
-    BIOLOGIC,
-    DART,
-    FISHER,
     KESTREL,
-    MERCHANT,
-    WARSHIP,
     EntityCategory,
     LinkDirection,
     OPPONENT_FIRE_MEMORY_MINUTES,
     get_spec,
     public_entity_catalog,
 )
+from .scenarios import (
+    GLASS_MISSION,
+    GLASS_STRAIT,
+    public_catalog,
+    require_scenario,
+)
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 TICK = 5
 MANEUVER_STEP = 1
+# Glass Strait clock. Scenario state carries the patrol's own schedule.
 END = 290
 REPORT_DUE = 260
-KINDS = ("surface", "submerged", "biologic")
-MISSION = {
-    "title": "Operation Glass Strait",
-    "own_ship": "Kestrel",
-    "setting": "Fictional ceasefire verification patrol in the Lydian Passage.",
-    "task": "Assess whether submerged traffic is using the patrol corridor and send an evidence-based assessment by 0730.",
-    "relief": "Be within 3 nautical miles of station RELIEF (24 east, 0 north) at 0800.",
-    "chart": "Local grid in nautical miles: east is +x, north is +y. Patrol corridor: x=0 to 22, y=-6 to +6. All charted water is deep enough for the game envelope.",
-    "orders": "Observe and report. Preserve discretion and meet the relief commitment. No offensive weapons employment is authorized in this patrol.",
-    "intel": "0200 shore estimate: submerged transit is possible; no reliable identification or contact solution. Commercial and survey traffic also use the passage.",
-    "radio": "An intelligence update is scheduled for 0330; a later update for 0510. Messages remain dated reports available for retrieval. A mast receive can copy one once its scheduled time has passed. A buoyant receive adds that mode's published delivery latency.",
-    "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
-}
+MISSION = GLASS_MISSION
 COMMAND_CONTRACT = {
     "player_command_window": {
         "minimum_minutes": 5,
@@ -143,9 +133,16 @@ class Dice:
         return options[-1]
 
 
-def clock(t):
-    total = 190 + t
+def clock(t, origin=190):
+    """Format minutes past midnight. Glass Strait's origin is 0310."""
+    total = origin + t
     return f"{total // 60:02d}{total % 60:02d}"
+
+
+def world_clock(state, elapsed=None):
+    if elapsed is None:
+        elapsed = state["t"]
+    return clock(elapsed, state["schedule"]["clock_origin_minutes"])
 
 
 def bearing(a, b):
@@ -306,6 +303,18 @@ def steady_text(state):
             f"depth {own['depth']:.0f} feet, {own['operating_mode']} mode.")
 
 
+OFFENSIVE_ROUNDS = ("exercise_heavyweight", "wartime_heavyweight")
+
+
+def _set_offensive_loadout(own, loaded):
+    """Put one heavyweight aboard. The other tube count is zero."""
+    if loaded not in OFFENSIVE_ROUNDS:
+        raise ValueError(f"Unknown offensive loadout {loaded!r}.")
+    quantities = {item.identifier: item.quantity for item in KESTREL.weapons}
+    for identifier in OFFENSIVE_ROUNDS:
+        own["inventory"][identifier] = quantities[identifier] if identifier == loaded else 0
+
+
 def entity_spec(entity):
     return get_spec(entity["spec"])
 
@@ -397,7 +406,7 @@ def prepare_actor_step(state, actor, dice):
 
 
 def report(state, department, text, category="routine", **extra):
-    entry = {"id": f"R{len(state['reports']) + 1:04d}", "time": clock(state["t"]),
+    entry = {"id": f"R{len(state['reports']) + 1:04d}", "time": world_clock(state),
              "elapsed_minutes": state["t"], "department": department,
              "category": category, "text": text, **extra}
     state["reports"].append(entry)
@@ -594,7 +603,7 @@ def observe_contact(state, actor, dice, mode="passive", array_spec=None):
     public_receiver = arrays.public_receiver(public_array)
     error_sources = arrays.error_sources(array_spec, evidence_window, array["coverage"])
     obs = {
-        "time": clock(t),
+        "time": world_clock(state, t),
         "elapsed_minutes": t,
         "bearing_true": round(measured_bearing) % 360,
         "own_east_nm": round(own["x"], 3),
@@ -641,17 +650,22 @@ def observe_contact(state, actor, dice, mode="passive", array_spec=None):
         )
 
 
-def new_world(seed):
-    state = {"t": 0, "platform": KESTREL.identifier,
-             "own": make_entity(KESTREL, id="own-kestrel", x=0.0, y=0.0,
-                                course=90.0, speed=5.0, depth=400.0),
-             "ordered": {"course": 90.0, "speed": 5.0, "depth": 400.0,
-                         "operating_mode": KESTREL.default_mode},
+def new_world(seed, scenario=GLASS_STRAIT):
+    selected = require_scenario(scenario)
+    start = selected.own_start
+    state = {"t": 0, "platform": KESTREL.identifier, "scenario": selected.identifier,
+             "schedule": selected.schedule.as_state(),
+             "mission": copy.deepcopy(selected.mission),
+             "own": make_entity(KESTREL, id="own-kestrel", x=start["x"], y=start["y"],
+                                course=start["course"], speed=start["speed"],
+                                depth=start["depth"], operating_mode=start["operating_mode"]),
+             "ordered": {"course": start["course"], "speed": start["speed"],
+                         "depth": start["depth"], "operating_mode": start["operating_mode"]},
              "actors": [], "tracks": [], "reports": [], "rng_trace": [], "focus": None,
              "pump_fault": False, "repair_progress": 0, "received": [], "sent": [],
              "antennas": initial_antennas(KESTREL), "radio_intercepts": [],
              "authorization": {
-                 "offensive_weapons": False,
+                 "offensive_weapons": selected.offensive_weapons,
                  "countermeasures": True,
              },
              "engagements": [], "countermeasures_active": [], "weapon_runs": [],
@@ -659,6 +673,7 @@ def new_world(seed):
              "looks": [],
              "ended": False, "end_reason": None, "deadline_announced": False,
              "maneuvering": False, "last_action_report_start": 0}
+    _set_offensive_loadout(state["own"], selected.offensive_loadout)
     dice = Dice(seed, state["rng_trace"])
     state["environment"] = acoustics.initialize_environment(dice)
     state["bearing_bias"] = dice.between(
@@ -678,88 +693,12 @@ def new_world(seed):
     }
     state["equipment_susceptibility"] = dice.between("initial:equipment", 0.4, 1.6)
     state["radio_reliability"] = dice.between("initial:radio", 0.58, 0.94)
-    kind = dice.choose("initial:primary-kind", KINDS, [0.46, 0.44, 0.10])
-    primary_spec = {
-        "surface": MERCHANT,
-        "submerged": DART,
-        "biologic": BIOLOGIC,
-    }[kind]
-    primary = make_entity(
-        primary_spec,
-        id="actor-a",
-        x=dice.between("initial:a-x", 5.5, 10),
-        y=dice.between("initial:a-y", -2.2, 4),
-        course=dice.between("initial:a-course", 70, 115),
-        speed=dice.between(
-            "initial:a-speed",
-            max(3.5, primary_spec.envelope.minimum_speed_knots),
-            min(8.5, primary_spec.mode(primary_spec.default_mode).maximum_speed_knots),
-        ),
-        depth=(
-            dice.between("initial:a-depth", 200, 650)
-            if kind == "submerged"
-            else dice.between("initial:a-depth", 80, 600)
-            if kind == "biologic"
-            else 0
-        ),
-        aware=False,
-        last_heard=None,
-        evaded=False,
-        name=dice.choose("initial:a-name", ["Cormorant", "Morrow", "Solace"]),
-        doctrine="avoid" if kind == "submerged" else "passage",
-        observations=[],
-        belief={"assessment": "no_contact"},
-        intent=(
-            "Transit east through the passage; avoid an observer if one is detected."
-            if kind == "submerged"
-            else "Continue the established passage."
-        ),
-    )
-    state["actors"].append(primary)
     # Background traffic is fixed at initialization too; no adaptive reinforcements.
-    backgrounds = (
-        (MERCHANT, "Larkspur"),
-        (FISHER, "Bracken"),
-        (WARSHIP, "Vigil"),
-    )
-    for i, (spec, name) in enumerate(backgrounds):
-        maximum = min(12, spec.mode(spec.default_mode).maximum_speed_knots)
-        state["actors"].append(
-            make_entity(
-                spec,
-                id=f"actor-{i + 2}",
-                x=dice.between(f"initial:b{i}-x", 15, 29),
-                y=dice.between(f"initial:b{i}-y", -11, 11),
-                course=dice.between(f"initial:b{i}-course", 230, 290),
-                speed=dice.between(
-                    f"initial:b{i}-speed",
-                    max(3, spec.envelope.minimum_speed_knots),
-                    maximum,
-                ),
-                depth=0,
-                aware=False,
-                last_heard=None,
-                evaded=False,
-                name=name,
-                doctrine="passage",
-                observations=[],
-                belief={"assessment": "no_contact"},
-                intent="Maintain an established westbound passage.",
-            )
-        )
-    shore_correct = dice.u("initial:shore-source") < 0.76
-    shore_type = kind if shore_correct else dice.choose("initial:shore-error", [k for k in KINDS if k != kind])
-    estimate = {"surface": "Coastal watch reports a possible surface vessel in the eastern approach.",
-                "submerged": "Coastal watch reports a possible submerged contact in the eastern approach.",
-                "biologic": "Coastal watch reports biological activity that may account for some acoustic reports."}[shore_type]
-    state["bulletins"] = [
-        {"id": "INTEL-0330", "available": 20, "text": "0330 intelligence update: " + estimate + " Source confidence: moderate; exact track unavailable. This is an independent shore report, not confirmed identification."},
-        {"id": "OPS-0510", "available": 120, "text": "0510 operations update: assessment deadline 0730 and relief station time 0800 remain unchanged. Commercial schedules are incomplete; absence from the list does not establish military identity."},
-    ]
+    selected.place(state, dice, make_entity)
     spectra.assign_persistent_signature(state["own"], dice)
     for actor in state["actors"]:
         spectra.assign_persistent_signature(actor, dice)
-    report(state, "Navigation", "0310. Local position (0 east, 0 north). Course 090, speed 5 knots, depth 400 feet. RELIEF lies 24 nautical miles east.")
+    report(state, "Navigation", selected.navigation_text(state["own"]))
     report(state, "Environment", acoustics.environment_report_text(state["environment"]))
     report(state, "Engineering", "Propulsion, sonar, communications and the auxiliary plant are available.")
     # Opening sonar is the same listen as every later step: only a detection
@@ -772,12 +711,14 @@ def new_world(seed):
     return state
 
 
-def initialize(seed=None):
+def initialize(seed=None, scenario=GLASS_STRAIT):
+    selected = require_scenario(scenario)
     seed = seed or secrets.token_hex(32)
-    state = new_world(seed)
+    state = new_world(seed, selected.identifier)
     package = {"engine_sha256": code_hash(), "seed": seed, "initial_state": state}
     commitment = digest(package)
     return {"format": 1, "version": VERSION, "engine_sha256": code_hash(), "seed": seed,
+            "scenario": selected.identifier,
             "initial_state": copy.deepcopy(state), "state": state,
             "commitment": commitment, "events": [], "head": commitment}
 
@@ -891,8 +832,8 @@ def _acoustic_belief(state, actor, dice, active):
     )
     if dice.u(f"opponent-hears:{actor['id']}:{t}") >= probability:
         return
-    fix_x = own["x"] + dice.between(f"opponent-fix-x:{t}", -2, 2)
-    fix_y = own["y"] + dice.between(f"opponent-fix-y:{t}", -2, 2)
+    fix_x = own["x"] + dice.between(f"opponent-fix-x:{actor['id']}:{t}", -2, 2)
+    fix_y = own["y"] + dice.between(f"opponent-fix-y:{actor['id']}:{t}", -2, 2)
     source = "acoustic"
     decoy = _active_decoy(state)
     if decoy is not None:
@@ -1284,7 +1225,9 @@ def opponent_step(state, actor, dice, active):
     if actor.get("aware") and not actor.get("evaded"):
         # Only its last detected, noisy fix informs the decision.
         actor["course"] = bearing(actor["last_heard"], actor)
-        actor["speed"] = dice.between(f"opponent-evasion-speed:{state['t']}", 6, 10)
+        drawn = dice.between(f"opponent-evasion-speed:{state['t']}", 6, 10)
+        limit = entity_spec(actor).mode(actor["operating_mode"]).maximum_speed_knots
+        actor["speed"] = min(drawn, limit)
         actor["evaded"] = True
 
 
@@ -1315,11 +1258,11 @@ def mast_observations(state, dice):
             report(state, "Scope", f"New visual contact designated {track['id']}.", "new_contact")
         b = round((bearing(state["own"], actor) + dice.between(f"mast-bearing:{actor['id']}:{state['t']}", -2, 2)) % 360) % 360
         track["last"] = state["t"]
-        visual = {"time": clock(state["t"]), "elapsed_minutes": state["t"], "bearing_true": b,
+        visual = {"time": world_clock(state), "elapsed_minutes": state["t"], "bearing_true": b,
                   "description": "Surface vessel observed; no military features resolved.",
                   "name_read": actor["name"] if gap < 2.5 else None}
         track["visual"] = visual
-        obs = {"time": clock(state["t"]), "elapsed_minutes": state["t"], "bearing_true": b,
+        obs = {"time": world_clock(state), "elapsed_minutes": state["t"], "bearing_true": b,
                "own_east_nm": round(state["own"]["x"], 3), "own_north_nm": round(state["own"]["y"], 3),
                "own_depth_feet": round(state["own"]["depth"], 2),
                "own_course_true": round(state["own"]["course"] % 360, 2),
@@ -1581,7 +1524,7 @@ def _attempt_link(state, dice, order, mode):
             )
         return
     sent = {
-        "time": clock(elapsed),
+        "time": world_clock(state, elapsed),
         "elapsed_minutes": elapsed,
         "assessment": order["assessment"],
         "text": order["message"],
@@ -1889,6 +1832,8 @@ def tick_world(state, dice, order, first_tick):
         if not actor.get("casualty"):
             move(actor, TICK)
         advance_entity_components(actor)
+    update_barrier(state)
+    update_convoy(state)
     advance_weapon_runs(state, dice, starts, _position_snapshot(state))
     _begin_towed_activity(state, order)
     _update_towed_stability(state, before_course)
@@ -1948,13 +1893,15 @@ def tick_world(state, dice, order, first_tick):
             for field in ("course", "speed", "depth", "operating_mode")):
         state["maneuvering"] = False
         report(state, "Ship control", steady_text(state), "maneuver_complete")
-    if t >= REPORT_DUE and not state["deadline_announced"]:
+    schedule = state["schedule"]
+    due = schedule["report_due_minutes"]
+    if due is not None and t >= due and not state["deadline_announced"]:
         state["deadline_announced"] = True
-        report(state, "Navigation", "0730 assessment deadline reached.", "deadline")
-    if t >= END:
+        report(state, "Navigation", schedule["deadline_text"], "deadline")
+    if t >= schedule["end_minutes"]:
         state["ended"] = True
-        state["end_reason"] = "0800 relief time reached"
-        report(state, "Navigation", "0800. Patrol exercise complete; the debrief can now be requested.", "exercise_end")
+        state["end_reason"] = schedule["end_reason"]
+        report(state, "Navigation", schedule["end_text"], "exercise_end")
 
 
 def require(order, field):
@@ -2265,6 +2212,10 @@ def _execution_events(reports, categories):
     ]
 
 
+def published_scenario_ids():
+    return {entry["id"] for entry in public_catalog()}
+
+
 def capability_report():
     result = KESTREL.public_capabilities()
     result["entity_model"] = {
@@ -2300,9 +2251,11 @@ def capability_report():
             "weapon and countermeasure employment",
         ],
         "scenario_selection": (
-            "Opposing entity specifications remain hidden until supported "
-            "observations identify them."
+            "Play begins in one named scenario. Opposing entity specifications "
+            "remain hidden until supported observations identify them. "
+            "Available scenarios and their public briefs are listed under scenarios."
         ),
+        "scenarios": public_catalog(),
     }
     result["narrowband_model"] = spectra.public_model()
     result["target_motion_model"] = motion_model()
@@ -2311,12 +2264,118 @@ def capability_report():
     return result
 
 
+def _latitude_at_meridian(actor, line_x):
+    """Latitude where this step's track meets the meridian, if it crosses west."""
+    step_nm = actor["speed"] * TICK / 60
+    angle = math.radians(actor["course"])
+    prev_x = actor["x"] - math.sin(angle) * step_nm
+    prev_y = actor["y"] - math.cos(angle) * step_nm
+    if prev_x <= line_x or actor["x"] > line_x:
+        return None
+    span = actor["x"] - prev_x
+    fraction = 0.0 if abs(span) < 1e-12 else (line_x - prev_x) / span
+    fraction = min(1.0, max(0.0, fraction))
+    return prev_y + (actor["y"] - prev_y) * fraction
+
+
+def update_barrier(state):
+    """Record a barrier crossing after movement. No random draw."""
+    barrier = state.get("barrier")
+    if not barrier:
+        return
+    if state["own"]["x"] > barrier["line_x"]:
+        barrier["own_ship_crossed"] = True
+    if barrier["crossed"]:
+        return
+    crosser = next(
+        actor for actor in state["actors"] if actor["id"] == barrier["crosser_id"]
+    )
+    latitude = _latitude_at_meridian(crosser, barrier["line_x"])
+    if latitude is None:
+        return
+    if barrier["south_y"] <= latitude <= barrier["north_y"]:
+        barrier["crossed"] = True
+        barrier["crossing_elapsed_minutes"] = state["t"]
+
+
+def update_convoy(state):
+    """Record the convoy's exit and the closest merchant. No random draw."""
+    convoy = state.get("convoy")
+    if not convoy:
+        return
+    own = state["own"]
+    actors = {actor["id"]: actor for actor in state["actors"]}
+    guide = actors[convoy["guide_id"]]
+    if convoy["exit_elapsed_minutes"] is None and guide["x"] >= convoy["exit_east_nm"]:
+        convoy["exit_elapsed_minutes"] = state["t"]
+    ranges = [
+        distance(own, actors[merchant_id]) for merchant_id in convoy["merchant_ids"]
+    ]
+    closest = min(ranges)
+    if convoy["closest_merchant_nm"] is None or closest < convoy["closest_merchant_nm"]:
+        convoy["closest_merchant_nm"] = closest
+
+
+def navigation_public(state):
+    """Player navigation. A barrier watch does not invent a relief station."""
+    schedule = state["schedule"]
+    own = state["own"]
+    remaining = max(0, schedule["end_minutes"] - state["t"])
+    barrier = state.get("barrier")
+    if barrier:
+        return {
+            "barrier_line_east_nm": barrier["line_x"],
+            "barrier_south_nm": barrier["south_y"],
+            "barrier_north_nm": barrier["north_y"],
+            "east_of_line_nm": round(own["x"] - barrier["line_x"], 2),
+            "along_line_north_nm": round(own["y"], 2),
+            "minutes_remaining": remaining,
+        }
+    convoy = state.get("convoy")
+    if convoy:
+        return {
+            "lane_north_nm": convoy["lane_north_nm"],
+            "lane_course_true": convoy["lane_course_true"],
+            "convoy_exit_east_nm": convoy["exit_east_nm"],
+            "minutes_remaining": remaining,
+        }
+    relief = schedule["relief"]
+    station = {"x": relief["x"], "y": relief["y"]}
+    gap = distance(own, station)
+    due = schedule["report_due_minutes"]
+    return {
+        "relief_distance_nm": round(gap, 2),
+        "relief_bearing_true": round(bearing(own, station)),
+        "minutes_to_relief": remaining,
+        "minimum_average_speed_to_station_knots": round(gap / (remaining / 60), 2) if remaining else None,
+        "minutes_to_assessment_deadline": max(0, due - state["t"]),
+        "relief_station": relief["name"],
+    }
+
+
+def restrictions_public(state):
+    """What fire control reads back. The employment rule itself stays in the catalog."""
+    if state["authorization"]["offensive_weapons"]:
+        return {
+            "exercise": "Wartime patrol. Offensive employment is authorized.",
+            "rules_of_engagement": (
+                "Fire control asks for confirmation before a launch. "
+                "A confirmed homing round then runs under the published employment rule."
+            ),
+        }
+    return {
+        "exercise": "Observation-only patrol.",
+        "rules_of_engagement": (
+            "Patrol orders do not authorize offensive weapons. "
+            "Fire control asks for confirmation and does not "
+            "block a confirmed launch. Countermeasures are authorized."
+        ),
+    }
+
+
 def public_view(game):
     state = game["state"]
     own = state["own"]
-    remaining = max(0, END - state["t"])
-    station = {"x": 24, "y": 0}
-    gap = distance(own, station)
     tracks = []
     for tr in state["tracks"]:
         tracks.append({
@@ -2325,8 +2384,8 @@ def public_view(game):
                 {"id": tr["receiver_id"], "role": tr.get("receiver_kind")}
                 if tr.get("receiver_id") else None
             ),
-            "first_report": clock(tr["first"]),
-            "last_report": clock(tr["last"]),
+            "first_report": world_clock(state, tr["first"]),
+            "last_report": world_clock(state, tr["last"]),
             "status": "recent" if state["t"] - tr["last"] < 20 else "stale",
             "assessments": assessments(tr, state["t"]),
             "visual": copy.deepcopy(tr["visual"]),
@@ -2339,10 +2398,11 @@ def public_view(game):
                 "receiver is not automatically the same contact."
             ),
         })
-    return {"game": MISSION["title"], "version": VERSION, "turn": len(game["events"]),
-            "time": clock(state["t"]), "elapsed_minutes": state["t"], "ended": state["ended"],
+    return {"game": state["mission"]["title"], "version": VERSION, "turn": len(game["events"]),
+            "scenario": state["scenario"],
+            "time": world_clock(state), "elapsed_minutes": state["t"], "ended": state["ended"],
             "initial_commitment_sha256": game["commitment"], "turn_receipt_sha256": game["head"],
-            "engine_sha256": game["engine_sha256"], "mission": copy.deepcopy(MISSION),
+            "engine_sha256": game["engine_sha256"], "mission": copy.deepcopy(state["mission"]),
             "command_contract": copy.deepcopy(COMMAND_CONTRACT),
             "platform_capabilities": capability_report(),
             "own_ship": {"name": "Kestrel", "east_nm": round(own["x"], 3), "north_nm": round(own["y"], 3),
@@ -2358,14 +2418,7 @@ def public_view(game):
                          "towed_array": arrays.public_towed(state.get("towed")),
                          "inventory": copy.deepcopy(own["inventory"]),
                          "authorization": copy.deepcopy(state["authorization"]),
-                         "restrictions": {
-                             "exercise": "Ceasefire verification patrol.",
-                             "rules_of_engagement": (
-                                 "Patrol orders do not authorize offensive weapons. "
-                                 "Fire control asks for confirmation and does not "
-                                 "block a confirmed launch. Countermeasures are authorized."
-                             ),
-                         },
+                         "restrictions": restrictions_public(state),
                          "weapons_running": [
                              {"id": run["id"], "weapon": run["weapon"], "target": run["target_label"]}
                              for run in state["weapon_runs"]
@@ -2381,10 +2434,7 @@ def public_view(game):
                              "All systems available"
                          ),
                          "repair_minutes_completed": state["repair_progress"]},
-            "navigation": {"relief_distance_nm": round(gap, 2), "relief_bearing_true": round(bearing(own, station)),
-                           "minutes_to_relief": remaining,
-                           "minimum_average_speed_to_station_knots": round(gap / (remaining / 60), 2) if remaining else None,
-                           "minutes_to_assessment_deadline": max(0, REPORT_DUE - state["t"])},
+            "navigation": navigation_public(state),
             "contacts": tracks, "transmitted_assessments": copy.deepcopy(state["sent"]),
             "reports_this_turn": copy.deepcopy(state["reports"][state["last_action_report_start"]:]),
             "report_count": len(state["reports"]),
@@ -2439,7 +2489,8 @@ def verify(game):
     seal = digest({"engine_sha256": game["engine_sha256"], "seed": game["seed"], "initial_state": game["initial_state"]})
     if seal != game["commitment"]:
         raise ValueError("Initial commitment mismatch.")
-    if canonical(new_world(game["seed"])) != canonical(game["initial_state"]):
+    scenario = game.get("scenario", GLASS_STRAIT)
+    if canonical(new_world(game["seed"], scenario)) != canonical(game["initial_state"]):
         raise ValueError("Seed does not regenerate the committed initial state.")
     replay = {k: copy.deepcopy(v) for k, v in game.items() if k not in ("state", "events", "head")}
     replay.update(state=copy.deepcopy(game["initial_state"]), events=[], head=game["commitment"])
@@ -2478,6 +2529,122 @@ def fsync_directory(path):
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _acoustic_observation_times(state, actor_id):
+    times = []
+    for track in state["tracks"]:
+        if track["actor"] != actor_id or track.get("receiver_kind") == "visual":
+            continue
+        for observation in track["observations"]:
+            if observation.get("source") == "mast":
+                continue
+            times.append(observation["elapsed_minutes"])
+    return times
+
+
+def _convoy_outcomes(state):
+    convoy = state["convoy"]
+    actors = {actor["id"]: actor for actor in state["actors"]}
+    screen = actors[convoy["screen_id"]]
+    escort = actors[convoy["escort_id"]]
+    closest = convoy["closest_merchant_nm"]
+    return {
+        "objective": "convoy",
+        "convoy_exit_elapsed_minutes": convoy["exit_elapsed_minutes"],
+        "closest_merchant_nm": None if closest is None else round(closest, 2),
+        "merchant_casualties": [
+            {"id": actor["id"], "effect": actor["casualty"]["effect"]}
+            for actor in state["actors"]
+            if actor["id"] in convoy["merchant_ids"] and actor.get("casualty")
+        ],
+        "escort_detected_own_ship": bool(escort["aware"]),
+        "screen_detected_own_ship": bool(screen["aware"]),
+        "radio_intercepts": copy.deepcopy(state["radio_intercepts"]),
+    }
+
+
+def _barrier_outcomes(state):
+    barrier = state["barrier"]
+    crossing = barrier["crossing_elapsed_minutes"]
+    times = _acoustic_observation_times(state, barrier["crosser_id"])
+    before = [stamp for stamp in times if crossing is not None and stamp <= crossing]
+    after = [stamp for stamp in times if crossing is not None and stamp > crossing]
+    crosser = next(actor for actor in state["actors"] if actor["id"] == barrier["crosser_id"])
+    return {
+        "objective": "barrier_line",
+        "crossed_the_line": barrier["crossed"],
+        "crossing_elapsed_minutes": crossing,
+        "detected_at_or_before_crossing": bool(before),
+        "detected_only_after_crossing": bool(after) and not before,
+        "own_ship_crossed_the_line": barrier["own_ship_crossed"],
+        "crosser_detected_own_ship": bool(crosser["aware"]),
+        "radio_intercepts": copy.deepcopy(state["radio_intercepts"]),
+    }
+
+
+def _station_outcomes(state, initial_state):
+    schedule = state["schedule"]
+    relief = schedule["relief"]
+    timely = [
+        sent for sent in state["sent"]
+        if sent["elapsed_minutes"] <= schedule["report_due_minutes"]
+    ]
+    primary_kind = contact_kind(initial_state["actors"][0])
+    evaluations = []
+    for sent in state["sent"]:
+        accurate = None if sent["assessment"] == "unresolved" else (
+            sent["assessment"] == "submerged_present"
+        ) == (primary_kind == "submerged")
+        evaluations.append({
+            **sent,
+            "matches_hidden_presence": accurate,
+            "interpretation": "Outcome accuracy only; evaluate the judgment against the cited evidence separately.",
+        })
+    at_relief = (
+        distance(state["own"], {"x": relief["x"], "y": relief["y"]}) <= relief["radius_nm"]
+        if state["t"] == schedule["end_minutes"] else None
+    )
+    outcomes = {
+        "assessment_sent_by_deadline": bool(timely),
+        "at_relief_station": at_relief,
+        "relief_station": relief["name"],
+        "opponent_detected_own_ship": any(actor["aware"] for actor in state["actors"]),
+        "radio_intercepts": copy.deepcopy(state["radio_intercepts"]),
+        "assessments": evaluations,
+    }
+    if state["scenario"] == GLASS_STRAIT:
+        outcomes["at_relief_at_0800"] = at_relief
+    return outcomes
+
+
+def _debrief_outcomes(game):
+    """Scenario result plus the weapon log. Decision quality stays in adjudication."""
+    state = game["state"]
+    if state.get("convoy"):
+        outcomes = _convoy_outcomes(state)
+    elif state.get("barrier"):
+        outcomes = _barrier_outcomes(state)
+    else:
+        outcomes = _station_outcomes(state, game["initial_state"])
+    outcomes["casualties"] = [
+        {"id": entity["id"], **copy.deepcopy(entity["casualty"])}
+        for entity in (state["own"], *state["actors"])
+        if entity.get("casualty")
+    ]
+    outcomes["engagements"] = copy.deepcopy(state["engagements"])
+    outcomes["opposition"] = [
+        {
+            "id": actor["id"],
+            "doctrine": actor.get("doctrine"),
+            "intent": actor.get("intent"),
+            "belief": copy.deepcopy(actor.get("belief")),
+            "observation_count": len(actor.get("observations", [])),
+            "casualty": copy.deepcopy(actor.get("casualty")),
+        }
+        for actor in state["actors"]
+    ]
+    return outcomes
 
 
 def _adjudication(game):
@@ -2544,49 +2711,26 @@ def debrief(game):
         raise ValueError("Debrief is unavailable during play. End the exercise explicitly to reveal it.")
     verification = verify(game)
     state = game["state"]
-    timely = [s for s in state["sent"] if s["elapsed_minutes"] <= REPORT_DUE]
-    primary_kind = contact_kind(game["initial_state"]["actors"][0])
-    evaluations = []
-    for sent in state["sent"]:
-        accurate = None if sent["assessment"] == "unresolved" else (sent["assessment"] == "submerged_present") == (primary_kind == "submerged")
-        evaluations.append({**sent, "matches_hidden_presence": accurate,
-                            "interpretation": "Outcome accuracy only; evaluate the judgment against the cited evidence separately."})
     emitters = [state["own"], *state["actors"]]
     return {"spoilers": True, "verification": verification, "seed": game["seed"],
+            "scenario": state["scenario"],
             "initial_state": game["initial_state"], "final_state": state, "events": game["events"],
             "emitter_spectra": [
                 {"id": entity["id"], **spectra.truth_snapshot(entity)} for entity in emitters
             ],
             "adjudication": _adjudication(game),
-            "outcomes": {"assessment_sent_by_deadline": bool(timely),
-                         "at_relief_at_0800": distance(state["own"], {"x": 24, "y": 0}) <= 3 if state["t"] == END else None,
-                         "opponent_detected_own_ship": any(a["aware"] for a in state["actors"]),
-                         "radio_intercepts": copy.deepcopy(state["radio_intercepts"]),
-                         "assessments": evaluations,
-                         "casualties": [
-                             {"id": entity["id"], **copy.deepcopy(entity["casualty"])}
-                             for entity in (state["own"], *state["actors"])
-                             if entity.get("casualty")
-                         ],
-                         "engagements": copy.deepcopy(state["engagements"]),
-                         "opposition": [
-                             {
-                                 "id": actor["id"],
-                                 "doctrine": actor.get("doctrine"),
-                                 "intent": actor.get("intent"),
-                                 "belief": copy.deepcopy(actor.get("belief")),
-                                 "observation_count": len(actor.get("observations", [])),
-                                 "casualty": copy.deepcopy(actor.get("casualty")),
-                             }
-                             for actor in state["actors"]
-                         ]}}
-
+            "outcomes": _debrief_outcomes(game)}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session", default=str(Path.cwd() / ".sessions" / "glass-strait"))
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("init")
+    init = sub.add_parser("init")
+    init.add_argument(
+        "--scenario",
+        default=GLASS_STRAIT,
+        help="Published scenario id. Defaults to glass-strait.",
+    )
     sub.add_parser("status")
     sub.add_parser("verify")
     sub.add_parser("history")
@@ -2606,7 +2750,7 @@ def main():
             if args.command == "init":
                 if save.exists():
                     raise ValueError("A session already exists; it has not been rerolled. Use status to resume.")
-                game = initialize()
+                game = initialize(scenario=args.scenario)
                 atomic_json(save, game)
                 result = public_view(game)
                 atomic_json(folder / "public.json", result)

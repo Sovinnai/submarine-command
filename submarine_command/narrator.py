@@ -131,7 +131,15 @@ class SessionStore:
             "platform": engine.capability_report(),
         }
 
-    def start(self, idempotency_key):
+    def start(self, idempotency_key, scenario=None):
+        if scenario is not None and (
+            not isinstance(scenario, str)
+            or scenario not in engine.published_scenario_ids()
+        ):
+            raise NarratorError(
+                "invalid_request",
+                "start scenario must name a published scenario.",
+            )
         session_id = self._id_for_key(idempotency_key)
         folder = self._folder(session_id, require_existing=False)
         created = not folder.exists()
@@ -144,8 +152,17 @@ class SessionStore:
             path = self._private_path(folder)
             if path.exists():
                 game = self._load(folder)
+                started = game.get("scenario", engine.GLASS_STRAIT)
+                if scenario is not None and started != scenario:
+                    raise NarratorError(
+                        "invalid_request",
+                        "This idempotency key already started a different session.",
+                    )
             else:
-                game = engine.initialize()
+                if scenario is None:
+                    game = engine.initialize()
+                else:
+                    game = engine.initialize(scenario=scenario)
                 engine.atomic_json(path, game)
             return {"session_id": session_id, "status": engine.public_view(game)}
 
@@ -239,8 +256,13 @@ def dispatch(store, raw):
             _require_shape(session_id, params, set())
             result = store.capabilities()
         elif operation == "start":
-            _require_shape(session_id, params, {"idempotency_key"})
-            result = store.start(params["idempotency_key"])
+            if session_id is not None:
+                raise NarratorError(
+                    "invalid_request", "This operation does not accept session_id."
+                )
+            if set(params) - {"idempotency_key", "scenario"} or "idempotency_key" not in params:
+                raise NarratorError("invalid_request", "params does not match this operation.")
+            result = store.start(params["idempotency_key"], params.get("scenario"))
         else:
             if session_id is None:
                 raise NarratorError("invalid_request", "This operation requires session_id.")
