@@ -81,7 +81,9 @@ class CapabilityTests(unittest.TestCase):
             public["environment"]["path_status"],
             ["supported", "uncertain", "outside_scope"],
         )
-        self.assertFalse(public["weapons"]["employment_modeled"])
+        self.assertTrue(public["weapons"]["employment_modeled"])
+        self.assertTrue(public["weapons"]["inventory"][0]["employment_implemented"])
+        self.assertTrue(all(item["employment_implemented"] for item in public["weapons"]["countermeasures"]))
         communications = public["communications"]
         self.assertEqual(communications["receive_modes"], ["mast_receive", "buoyant_receive"])
         self.assertEqual(communications["transmit_modes"], ["mast_transmit"])
