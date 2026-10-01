@@ -3,13 +3,15 @@
 A scenario is the captain's brief plus the hidden layout drawn at
 initialization. Movement, acoustics, communications and order validation stay
 on rules version 0.12. Glass Strait is a corridor assessment with a relief
-station. Miller Line is a barrier watch with no station. Opposing
-specifications stay out of the public brief.
+station. Miller Line is a barrier watch. Cinder Road is a wartime convoy
+approach. Weapon flight is not resolved. Opposing specifications stay out of
+the public brief.
 """
 from .platforms import BIOLOGIC, DART, FISHER, KESTREL, MERCHANT, WARSHIP
 
 GLASS_STRAIT = "glass-strait"
 MILLER_LINE = "miller-line"
+CINDER_ROAD = "cinder-road"
 
 GLASS_MISSION = {
     "title": "Operation Glass Strait",
@@ -360,6 +362,61 @@ def _place_miller(state, dice, make_entity):
     ]
 
 
+CINDER_MISSION = {
+    "title": "Operation Cinder Road",
+    "own_ship": "Kestrel",
+    "setting": (
+        "Fictional wartime patrol against an eastbound coastal convoy. "
+        "This is not an exercise classification and not a barrier watch."
+    ),
+    "task": (
+        "Reach attack geometry on a merchant in the convoy before the guide "
+        "passes east of x=30. Attack geometry is 3 nautical miles or closer, "
+        "own speed 8 knots or less, own depth 150 to 500 feet, and the escort "
+        "more than 6 nautical miles away. Weapon flight and damage are not resolved."
+    ),
+    "chart": (
+        "Local grid in nautical miles: east is +x, north is +y. "
+        "The convoy lane is the parallel y=0, course 090. "
+        "One water depth and one sound-speed profile apply across the lane. "
+        "The lane is not a change in bathymetry."
+    ),
+    "orders": (
+        "Close a merchant on the safe side of the escort, or let the convoy pass. "
+        "No weapon or countermeasure can be employed. "
+        "There is no relief station."
+    ),
+    "intel": (
+        "The convoy is eastbound on the lane. The escort's side of the column is not known. "
+        "A submarine may be screening ahead of the column. "
+        "A shore plot does not give a present position."
+    ),
+    "radio": (
+        "A plot reminder is scheduled for 1630 and an operations reminder for 1830. "
+        "A mast receive can copy one once its scheduled time has passed. "
+        "A buoyant receive adds that mode's published delivery latency. "
+        "A mast transmission can be intercepted by the escort inside the published range. "
+        "Sending an assessment does not attack the convoy."
+    ),
+    "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
+    "simplifications": (
+        "Merchants and the escort hold course and speed. "
+        "The screening submarine holds course unless it detects Kestrel, then it evades once from its own fix. "
+        "Attack geometry is recorded from true range at a five-minute step. "
+        "The engine does not launch a weapon, resolve a hit, or apply damage. "
+        "A mast sighting inside the published visual range can read a name. It is not an attack."
+    ),
+}
+
+CINDER_ENGAGEMENT = {
+    "exercise": "Wartime patrol. Weapon flight and damage are not resolved.",
+    "rules_of_engagement": (
+        "Attack geometry on a merchant is the scored result. "
+        "Weapon and countermeasure employment is not available."
+    ),
+    "employment_available": False,
+}
+
 MILLER_SCHEDULE = Schedule(
     clock_origin_minutes=60,
     report_due_minutes=None,
@@ -398,6 +455,142 @@ GLASS_START = {
     "operating_mode": KESTREL.default_mode,
 }
 
+def _cinder_navigation(own):
+    return (
+        f"1600. Local position ({own['x']:g} east, {own['y']:g} north). "
+        f"Course {own['course']:03.0f}, speed {own['speed']:g} knots, "
+        f"depth {own['depth']:g} feet. "
+        "The convoy lane is y=0, eastbound. No relief station is assigned."
+    )
+
+
+def _place_cinder(state, dice, make_entity):
+    """Hidden wartime convoy.
+
+    Two merchants hold an eastbound column on the lane. The escort is abeam
+    on one side, far enough that attack geometry is possible from the other
+    side and not from the escort's side. A diesel screens ahead on battery.
+    """
+    guide_x = dice.between("cinder:guide-x", -8, -4)
+    guide_y = dice.between("cinder:guide-y", -0.5, 0.5)
+    guide = make_entity(
+        MERCHANT,
+        id="actor-guide",
+        x=guide_x,
+        y=guide_y,
+        course=90.0,
+        speed=8.0,
+        depth=0,
+        aware=False,
+        last_heard=None,
+        evaded=False,
+        name="Hasp",
+        intent="Hold the eastbound lane at the column speed.",
+    )
+    trailer = make_entity(
+        MERCHANT,
+        id="actor-trailer",
+        x=guide_x - 2.0,
+        y=guide_y + dice.between("cinder:trailer-y", -0.4, 0.4),
+        course=90.0,
+        speed=8.0,
+        depth=0,
+        aware=False,
+        last_heard=None,
+        evaded=False,
+        name="Lanyard",
+        intent="Follow the guide at the column speed.",
+    )
+    side = 1.0 if dice.u("cinder:escort-side") < 0.5 else -1.0
+    escort = make_entity(
+        WARSHIP,
+        id="actor-escort",
+        x=guide_x + dice.between("cinder:escort-x", -1, 1),
+        y=guide_y + side * dice.between("cinder:escort-offset", 5, 6.5),
+        course=90.0,
+        speed=8.0,
+        depth=0,
+        aware=False,
+        last_heard=None,
+        evaded=False,
+        name="Brand",
+        intent="Stay abeam of the guide on the assigned side.",
+    )
+    screen = make_entity(
+        DART,
+        id="actor-screen",
+        x=guide_x + dice.between("cinder:screen-x", 7, 11),
+        y=guide_y + dice.between("cinder:screen-y", -1.5, 1.5),
+        course=90.0,
+        speed=5.0,
+        depth=dice.between("cinder:screen-depth", 250, 450),
+        aware=False,
+        last_heard=None,
+        evaded=False,
+        name="Mote",
+        intent="Screen ahead of the column. Evade if an observer is detected.",
+    )
+    state["actors"].extend((guide, trailer, escort, screen))
+    state["engagement"] = dict(CINDER_ENGAGEMENT)
+    state["convoy"] = {
+        "lane_north_nm": 0.0,
+        "lane_course_true": 90.0,
+        "attack_range_nm": 3.0,
+        "attack_maximum_speed_knots": 8.0,
+        "attack_minimum_depth_feet": 150.0,
+        "attack_maximum_depth_feet": 500.0,
+        "escort_clear_nm": 6.0,
+        "exit_east_nm": 30.0,
+        "guide_id": guide["id"],
+        "merchant_ids": [guide["id"], trailer["id"]],
+        "escort_id": escort["id"],
+        "screen_id": screen["id"],
+        "achieved": False,
+        "attack_elapsed_minutes": None,
+        "exit_elapsed_minutes": None,
+        "closest_merchant_nm": None,
+    }
+    state["bulletins"] = [
+        {
+            "id": "PLOT-1630",
+            "available": 30,
+            "text": (
+                "1630 shore plot: the convoy is still estimated eastbound on "
+                "the charted lane. Escort station is not known. This is not a "
+                "present-position report."
+            ),
+        },
+        {
+            "id": "OPS-1830",
+            "available": 150,
+            "text": (
+                "1830 operations update: attack geometry is still required "
+                "before the guide passes east of x=30. Weapon flight is not "
+                "resolved. There is no relief station."
+            ),
+        },
+    ]
+
+
+CINDER_SCHEDULE = Schedule(
+    clock_origin_minutes=960,
+    report_due_minutes=None,
+    end_minutes=300,
+    deadline_text="",
+    end_text="2100. Convoy patrol complete; the debrief can now be requested.",
+    end_reason="2100 convoy patrol ended",
+    relief=None,
+)
+
+CINDER_START = {
+    "x": 14.0,
+    "y": -11.0,
+    "course": 0.0,
+    "speed": 5.0,
+    "depth": 350.0,
+    "operating_mode": "standard",
+}
+
 SCENARIOS = {
     GLASS_STRAIT: Scenario(
         GLASS_STRAIT,
@@ -420,6 +613,26 @@ SCENARIOS = {
             "south_nm": -18.0,
             "north_nm": 18.0,
             "sectors": "North is y>0. South is y<0.",
+        },
+    ),
+    CINDER_ROAD: Scenario(
+        CINDER_ROAD,
+        CINDER_MISSION,
+        CINDER_SCHEDULE,
+        CINDER_START,
+        _place_cinder,
+        _cinder_navigation,
+        geometry={
+            "type": "convoy_attack_geometry",
+            "lane_north_nm": 0.0,
+            "lane_course_true": 90.0,
+            "attack_range_nm": 3.0,
+            "attack_maximum_speed_knots": 8.0,
+            "attack_minimum_depth_feet": 150.0,
+            "attack_maximum_depth_feet": 500.0,
+            "escort_clear_nm": 6.0,
+            "convoy_exit_east_nm": 30.0,
+            "weapon_flight": "not resolved",
         },
     ),
 }

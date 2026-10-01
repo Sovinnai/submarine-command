@@ -9,7 +9,7 @@ import unittest
 
 from submarine_command import engine, narrator
 from submarine_command.platforms import DART, EntityCategory
-from submarine_command.scenarios import GLASS_MISSION, MILLER_LINE
+from submarine_command.scenarios import CINDER_ROAD, GLASS_MISSION, MILLER_LINE
 
 
 GLASS_SEED = "ab" * 32
@@ -198,6 +198,95 @@ class MillerLineTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("Unknown scenario", result.stdout)
             self.assertFalse((session / "private.json").exists())
+
+
+class CinderRoadTests(unittest.TestCase):
+    def test_opening_brief_publishes_attack_geometry_and_hides_the_convoy(self):
+        game = engine.initialize(f"{0:064x}", CINDER_ROAD)
+        public = engine.public_view(game)
+        visible = json.dumps({
+            "public": public,
+            "history": engine.public_history(game),
+        })
+        self.assertEqual(public["game"], "Operation Cinder Road")
+        self.assertEqual(public["time"], "1600")
+        self.assertEqual(public["navigation"]["attack_range_nm"], 3)
+        self.assertEqual(public["navigation"]["escort_clear_nm"], 6)
+        self.assertEqual(public["navigation"]["convoy_exit_east_nm"], 30)
+        self.assertNotIn("relief_station", public["navigation"])
+        self.assertFalse(public["own_ship"]["restrictions"]["employment_available"])
+        self.assertIn("Weapon flight", public["own_ship"]["restrictions"]["exercise"])
+        for name in ("Hasp", "Lanyard", "Brand", "Mote"):
+            self.assertNotIn(name, visible)
+        self.assertNotIn("escort_id", visible)
+        self.assertNotIn("closest_merchant_nm", visible)
+        guide = next(actor for actor in game["state"]["actors"] if actor["id"] == "actor-guide")
+        self.assertNotIn(f"{guide['x']:.3f}", visible)
+
+    def test_escort_side_decides_whether_the_same_range_is_an_attack(self):
+        game = engine.initialize(f"{2:064x}", CINDER_ROAD)
+        state = game["state"]
+        guide = next(actor for actor in state["actors"] if actor["id"] == "actor-guide")
+        escort = next(actor for actor in state["actors"] if actor["id"] == "actor-escort")
+        side = 1.0 if escort["y"] > guide["y"] else -1.0
+        state["own"]["x"] = guide["x"]
+        state["own"]["y"] = guide["y"] - side * 2.5
+        state["own"]["speed"] = 6
+        state["own"]["depth"] = 300
+        engine.update_convoy(state)
+        self.assertTrue(state["convoy"]["achieved"])
+        state["convoy"]["achieved"] = False
+        state["convoy"]["attack_elapsed_minutes"] = None
+        state["own"]["y"] = guide["y"] + side * 2.5
+        engine.update_convoy(state)
+        self.assertFalse(state["convoy"]["achieved"])
+        self.assertLess(engine.distance(state["own"], escort), 6)
+
+    def test_column_geometry_and_a_safe_side_approach_score_without_a_weapon(self):
+        for index in range(20):
+            state = engine.new_world(f"{index:064x}", CINDER_ROAD)
+            guide = next(actor for actor in state["actors"] if actor["id"] == "actor-guide")
+            trailer = next(actor for actor in state["actors"] if actor["id"] == "actor-trailer")
+            escort = next(actor for actor in state["actors"] if actor["id"] == "actor-escort")
+            screen = next(actor for actor in state["actors"] if actor["id"] == "actor-screen")
+            self.assertGreater(guide["x"], trailer["x"])
+            self.assertGreater(screen["x"], guide["x"])
+            self.assertGreaterEqual(abs(escort["y"] - guide["y"]), 5)
+            self.assertLessEqual(abs(escort["y"] - guide["y"]), 6.5)
+            for actor in (guide, trailer, escort, screen):
+                self.assertEqual(actor["course"], 90)
+        game = engine.initialize(f"{5:064x}", CINDER_ROAD)
+        while not game["state"]["ended"] and not game["state"]["convoy"]["achieved"]:
+            state = game["state"]
+            guide = next(actor for actor in state["actors"] if actor["id"] == "actor-guide")
+            escort = next(actor for actor in state["actors"] if actor["id"] == "actor-escort")
+            side = 1.0 if escort["y"] > guide["y"] else -1.0
+            aim_x = guide["x"] + 6
+            aim_y = guide["y"] - side * 2.2
+            course = engine.bearing(state["own"], {"x": aim_x, "y": aim_y})
+            gap = engine.distance(state["own"], {"x": aim_x, "y": aim_y})
+            engine.apply_order(game, {
+                "id": f"close-{len(game['events'])}",
+                "expected_turn": len(game["events"]),
+                "activity": "listen",
+                "minutes": 20,
+                "course": course,
+                "speed": 6 if gap < 4 else 12,
+                "depth": 300,
+                "operating_mode": "standard",
+                "interrupt_on": [],
+            })
+        self.assertTrue(game["state"]["convoy"]["achieved"])
+        engine.apply_order(game, {
+            "id": "end-cinder",
+            "expected_turn": len(game["events"]),
+            "activity": "end",
+        })
+        outcomes = engine.debrief(game)["outcomes"]
+        self.assertEqual(outcomes["objective"], "convoy_attack_geometry")
+        self.assertTrue(outcomes["attack_geometry_reached"])
+        self.assertEqual(outcomes["weapon_flight"], "not resolved")
+        self.assertLessEqual(outcomes["closest_merchant_nm"], 3)
 
 
 class NarratorScenarioTests(unittest.TestCase):

@@ -197,7 +197,7 @@ verification. During active play, debrief refuses to reveal anything.
 
 | Area | Behavior |
 |---|---|
-| Scenarios | Operation Glass Strait, a corridor assessment with a relief station, and Operation Miller Line, a barrier watch with no station. Opposing traffic is drawn at initialization and stays hidden |
+| Scenarios | Glass Strait, a corridor assessment; Miller Line, a barrier watch; Cinder Road, a wartime convoy approach. Weapon flight is not resolved. Opposing traffic stays hidden |
 | Hidden state | Persistent seed, fixed initial contacts, event-keyed random draws, replay verification, public-only outputs |
 | Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |

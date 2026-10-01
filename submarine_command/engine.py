@@ -1188,6 +1188,7 @@ def tick_world(state, dice, order, first_tick):
         move(actor, TICK)
         advance_entity_components(actor)
     update_barrier(state)
+    update_convoy(state)
     _begin_towed_activity(state, order)
     _update_towed_stability(state, before_course)
     if active:
@@ -1555,6 +1556,38 @@ def update_barrier(state):
         barrier["crossing_elapsed_minutes"] = state["t"]
 
 
+def update_convoy(state):
+    """Record attack geometry after movement. No random draw and no weapon."""
+    convoy = state.get("convoy")
+    if not convoy:
+        return
+    own = state["own"]
+    actors = {actor["id"]: actor for actor in state["actors"]}
+    guide = actors[convoy["guide_id"]]
+    if convoy["exit_elapsed_minutes"] is None and guide["x"] >= convoy["exit_east_nm"]:
+        convoy["exit_elapsed_minutes"] = state["t"]
+    ranges = [
+        distance(own, actors[merchant_id]) for merchant_id in convoy["merchant_ids"]
+    ]
+    closest = min(ranges)
+    if convoy["closest_merchant_nm"] is None or closest < convoy["closest_merchant_nm"]:
+        convoy["closest_merchant_nm"] = closest
+    if convoy["achieved"] or convoy["exit_elapsed_minutes"] is not None:
+        return
+    escort_range = distance(own, actors[convoy["escort_id"]])
+    in_reach = closest <= convoy["attack_range_nm"]
+    slow_enough = own["speed"] <= convoy["attack_maximum_speed_knots"]
+    deep_enough = (
+        convoy["attack_minimum_depth_feet"]
+        <= own["depth"]
+        <= convoy["attack_maximum_depth_feet"]
+    )
+    escort_clear = escort_range > convoy["escort_clear_nm"]
+    if in_reach and slow_enough and deep_enough and escort_clear:
+        convoy["achieved"] = True
+        convoy["attack_elapsed_minutes"] = state["t"]
+
+
 def navigation_public(state):
     """Player navigation. A barrier watch does not invent a relief station."""
     schedule = state["schedule"]
@@ -1568,6 +1601,19 @@ def navigation_public(state):
             "barrier_north_nm": barrier["north_y"],
             "east_of_line_nm": round(own["x"] - barrier["line_x"], 2),
             "along_line_north_nm": round(own["y"], 2),
+            "minutes_remaining": remaining,
+        }
+    convoy = state.get("convoy")
+    if convoy:
+        return {
+            "lane_north_nm": convoy["lane_north_nm"],
+            "lane_course_true": convoy["lane_course_true"],
+            "attack_range_nm": convoy["attack_range_nm"],
+            "attack_maximum_speed_knots": convoy["attack_maximum_speed_knots"],
+            "attack_minimum_depth_feet": convoy["attack_minimum_depth_feet"],
+            "attack_maximum_depth_feet": convoy["attack_maximum_depth_feet"],
+            "escort_clear_nm": convoy["escort_clear_nm"],
+            "convoy_exit_east_nm": convoy["exit_east_nm"],
             "minutes_remaining": remaining,
         }
     relief = schedule["relief"]
@@ -1628,7 +1674,7 @@ def public_view(game):
                          "sonar_receivers": public_sonar_receivers(state),
                          "towed_array": arrays.public_towed(state.get("towed")),
                          "inventory": copy.deepcopy(own["inventory"]),
-                         "restrictions": {
+                         "restrictions": state.get("engagement") or {
                              "exercise": "Observation-only patrol.",
                              "rules_of_engagement": "No offensive weapons employment authorized.",
                              "employment_available": False,
@@ -1744,6 +1790,22 @@ def _acoustic_observation_times(state, actor_id):
     return times
 
 
+def _convoy_outcomes(state):
+    convoy = state["convoy"]
+    screen = next(actor for actor in state["actors"] if actor["id"] == convoy["screen_id"])
+    closest = convoy["closest_merchant_nm"]
+    return {
+        "objective": "convoy_attack_geometry",
+        "attack_geometry_reached": convoy["achieved"],
+        "attack_elapsed_minutes": convoy["attack_elapsed_minutes"],
+        "convoy_exit_elapsed_minutes": convoy["exit_elapsed_minutes"],
+        "closest_merchant_nm": None if closest is None else round(closest, 2),
+        "screen_detected_own_ship": bool(screen["aware"]),
+        "weapon_flight": "not resolved",
+        "radio_intercepts": copy.deepcopy(state["radio_intercepts"]),
+    }
+
+
 def _barrier_outcomes(state):
     barrier = state["barrier"]
     crossing = barrier["crossing_elapsed_minutes"]
@@ -1803,7 +1865,9 @@ def debrief(game):
         raise ValueError("Debrief is unavailable during play. End the exercise explicitly to reveal it.")
     verification = verify(game)
     state = game["state"]
-    if state.get("barrier"):
+    if state.get("convoy"):
+        outcomes = _convoy_outcomes(state)
+    elif state.get("barrier"):
         outcomes = _barrier_outcomes(state)
     else:
         outcomes = _station_outcomes(state, game["initial_state"])

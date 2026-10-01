@@ -12,8 +12,8 @@ This is the design contract. The README and capability report describe what the
 current prototype implements; GitHub issues track implementation work.
 
 A session is one published scenario. The scenario supplies the public brief,
-the clock, the relief station and the hidden initial layout. Resolution uses
-the rules in this document. See [Scenarios](SCENARIOS.md).
+the clock, its assigned station or geometry, and the hidden initial layout.
+Resolution uses the rules in this document. See [Scenarios](SCENARIOS.md).
 
 ## Command and resolution
 
