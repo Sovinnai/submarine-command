@@ -34,6 +34,13 @@ python -m submarine_command --session .sessions/my-patrol status
 existing session. `status`, `history`, `capabilities`, and `verify` are read-only;
 they do not advance time or generate fresh sensor observations.
 
+```bash
+python -m submarine_command --session .sessions/harrow-bank init --scenario harrow-bank
+```
+
+`init` without `--scenario` starts Operation Glass Strait. The public catalog
+lists every scenario. See [Scenarios](docs/SCENARIOS.md).
+
 An editable install also supplies a `submarine-command` executable:
 
 ```bash
@@ -190,6 +197,7 @@ verification. During active play, debrief refuses to reveal anything.
 
 | Area | Behavior |
 |---|---|
+| Scenarios | Operation Glass Strait and Operation Harrow Bank. Each has a public brief, clock and relief station; opposing traffic is drawn at initialization and stays hidden |
 | Hidden state | Persistent seed, fixed initial contacts, event-keyed random draws, replay verification, public-only outputs |
 | Entity model | Shared specifications and operating state for an SSN, diesel/AIP submarine, merchant, surface warship, fishing vessel and biologic group |
 | Own platform | Fictional Kestrel-class nuclear exercise submarine; capability, mode and validation limits share one definition |
@@ -213,6 +221,7 @@ be invented by the narrator to answer a question or resolve an order.
 ## Development
 
 - [Game design](docs/DESIGN.md): turn-based play and idealized physical quantities.
+- [Scenarios](docs/SCENARIOS.md): public briefs and hidden initial layouts for the published patrols.
 - [Architecture](docs/ARCHITECTURE.md): truth, beliefs, observations and audit boundaries.
 - [Acoustic environment](docs/ACOUSTICS.md): sound-speed profile, path approximations, units and recorded assumptions.
 - [Narrowband spectra](docs/SPECTRA.md): persistent emitter lines, operating-state rules and noisy frequency measurements.

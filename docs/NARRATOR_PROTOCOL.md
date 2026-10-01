@@ -62,6 +62,16 @@ status. A weak or reused key could let another client recover that session.
 {"v":1,"request_id":"r2","op":"start","params":{"idempotency_key":"7f3d9c0e1b2a4d5f60718293a4b5c6d7"}}
 ```
 
+`scenario` is optional. When it is omitted, start initializes Operation Glass
+Strait. When it is present, it must name a scenario from the public catalog.
+The first successful start for an idempotency key owns the session: a retry
+with the same scenario returns that session, and a retry that names a different
+scenario is rejected without rerolling it.
+
+```json
+{"v":1,"request_id":"r2b","op":"start","params":{"idempotency_key":"7f3d9c0e1b2a4d5f60718293a4b5c6d7","scenario":"harrow-bank"}}
+```
+
 `status`, `history` and `verify` are read-only. They require the opaque
 `session_id` returned by `start` and an empty parameter object.
 
