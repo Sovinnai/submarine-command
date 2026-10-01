@@ -1971,11 +1971,11 @@ def _evaluate_mission_assessment(sent, state):
     """Score a transmitted assessment after the exercise ends.
 
     Presence is corridor-level. Track association asks whether the cited
-    contact belongs to a submerged actor. Classification asks whether the
-    assessment label matches that contact's true domain. Accidental
-    correctness is a right presence answer on the wrong track. Unresolved
-    and area-presence assessments leave the track axes unset. Shore reports
-    never invent a track link.
+    contact belongs to the mission-relevant actor (actors[0] for a station
+    patrol). Classification asks whether the assessment label matches that
+    contact's true domain. Accidental correctness is a right presence answer
+    on the wrong track. Unresolved and area-presence assessments leave the
+    track axes unset. Shore reports never invent a track link.
     """
     scope = sent.get("scope") or _assessment_scope(sent["basis"], state["reports"])
     evaluation = {
@@ -2023,15 +2023,17 @@ def _evaluate_mission_assessment(sent, state):
 
     actor = next(entry for entry in state["actors"] if entry["id"] == track["actor"])
     kind = contact_kind(actor)
-    correct_association = kind == "submerged"
+    mission_actor_id = state["actors"][0]["id"]
+    correct_association = track["actor"] == mission_actor_id
     correct_classification = _domain_matches_assessment(kind, assessment)
     evaluation["correct_track_association"] = correct_association
     evaluation["correct_classification"] = correct_classification
     evaluation["accidental_correctness"] = bool(correct_presence) and not correct_association
     evaluation["interpretation"] = (
-        "Presence is corridor-level. Track association and classification "
-        "are scored against the hidden actor of the cited contact only after "
-        "the exercise ends."
+        "Presence is corridor-level. Track association asks whether the "
+        "cited contact belongs to the mission-relevant actor; classification "
+        "compares the assessment label to that contact's true domain. Both "
+        "are scored only after the exercise ends."
     )
     return evaluation
 

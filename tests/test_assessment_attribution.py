@@ -183,6 +183,41 @@ class AssessmentAttributionTests(unittest.TestCase):
         self.assertTrue(evaluation["correct_classification"])
         self.assertFalse(evaluation["accidental_correctness"])
 
+    def test_correct_surface_claim_on_mission_actor_is_not_accidental(self):
+        """Seed 00x32: primary is surface; citing its track is a true association."""
+        self.game = e.initialize("00" * 32)
+        self.assertEqual(e.contact_kind(self.game["state"]["actors"][0]), "surface")
+        self.listen_for_contacts()
+        mission_track = next(
+            track["id"]
+            for track in self.game["state"]["tracks"]
+            if track["actor"] == self.game["state"]["actors"][0]["id"]
+        )
+        self.transmit("surface_or_biologic", [self.report_for(mission_track)])
+        evaluation = self.end_and_debrief()["outcomes"]["assessments"][-1]
+        self.assertEqual(evaluation["scope"], {"kind": "track", "contact": mission_track})
+        self.assertTrue(evaluation["correct_presence"])
+        self.assertTrue(evaluation["correct_track_association"])
+        self.assertTrue(evaluation["correct_classification"])
+        self.assertFalse(evaluation["accidental_correctness"])
+
+    def test_surface_claim_on_background_track_is_accidentally_correct(self):
+        """When the primary is surface, citing another surface track is accidental."""
+        self.game = e.initialize("00" * 32)
+        self.assertEqual(e.contact_kind(self.game["state"]["actors"][0]), "surface")
+        self.listen_for_contacts()
+        background = next(
+            track["id"]
+            for track in self.game["state"]["tracks"]
+            if track["actor"] != self.game["state"]["actors"][0]["id"]
+        )
+        self.transmit("surface_or_biologic", [self.report_for(background)])
+        evaluation = self.end_and_debrief()["outcomes"]["assessments"][-1]
+        self.assertTrue(evaluation["correct_presence"])
+        self.assertFalse(evaluation["correct_track_association"])
+        self.assertTrue(evaluation["correct_classification"])
+        self.assertTrue(evaluation["accidental_correctness"])
+
     def test_replay_keeps_attribution_scores(self):
         self.listen_for_contacts()
         self.transmit("submerged_present", [self.report_for("S03")])
