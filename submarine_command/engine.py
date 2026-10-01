@@ -43,7 +43,7 @@ from .scenarios import (
     require_scenario,
 )
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 TICK = 5
 MANEUVER_STEP = 1
 # Glass Strait clock. Scenario state carries the patrol's own schedule.
@@ -84,7 +84,7 @@ COMMAND_CONTRACT = {
         "required": ["id", "expected_turn", "activity", "minutes", "course", "speed", "depth", "operating_mode", "interrupt_on"],
         "conditional": {"focus": "focus activity", "link": "receive, transmit, or retrieve activity", "assessment": "transmit activity", "message": "transmit activity", "basis": "transmit or employ activity", "weapon": "employ activity", "target": "employ activity", "confirm": "employ activity"},
         "end_order": ["id", "expected_turn", "activity"],
-        "description": "Every listed field must be stated explicitly. The engine supplies no default for any order field: an omitted field is rejected before any state changes rather than being filled in from current or previous settings. An empty interrupt_on list means no interrupt is selected, and an empty basis list means the assessment cites no report.",
+        "description": "Every listed field must be stated explicitly. The engine supplies no default for any order field: an omitted field is rejected before any state changes rather than being filled in from current or previous settings. An empty interrupt_on list means no interrupt is selected, and an empty basis list means the assessment cites no report. A transmit basis may name reports from at most one contact track: that makes a track-specific classification. Shore or intel reports have no contact field and stay unassociated with sonar tracks; citing only those, or citing none, makes an unattributed area-presence assessment.",
     },
     "interrupts": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category and report id from that boundary; the unused portion is never continued automatically.",
 }
@@ -1529,6 +1529,7 @@ def _attempt_link(state, dice, order, mode):
         "assessment": order["assessment"],
         "text": order["message"],
         "basis": order["basis"],
+        "scope": _assessment_scope(order["basis"], state["reports"]),
         "mode": mode.identifier,
     }
     state["sent"].append(sent)
@@ -1923,6 +1924,118 @@ def _require_basis(order, state):
         raise ValueError("Basis must list existing report ids only.")
 
 
+def _contacts_cited_by_basis(basis, reports):
+    """Public contact ids from cited reports. Shore and intel reports have none."""
+    by_id = {entry["id"]: entry for entry in reports}
+    contacts = []
+    for report_id in basis:
+        entry = by_id.get(report_id)
+        if entry is None:
+            continue
+        contact = entry.get("contact")
+        if isinstance(contact, str) and contact and contact not in contacts:
+            contacts.append(contact)
+    return contacts
+
+
+def _assessment_scope(basis, reports):
+    """Public scope: one cited contact is track-specific; none is area-presence."""
+    contacts = _contacts_cited_by_basis(basis, reports)
+    if not contacts:
+        return {"kind": "area", "contact": None}
+    return {"kind": "track", "contact": contacts[0]}
+
+
+def _require_assessment_basis(order, state):
+    """Transmit basis: existing ids, and at most one contact track."""
+    _require_basis(order, state)
+    contacts = _contacts_cited_by_basis(order["basis"], state["reports"])
+    if len(contacts) > 1:
+        raise ValueError(
+            "Transmission basis may cite reports from at most one contact track. "
+            "Cite a single track for a track-specific classification, or cite only "
+            "shore or intel reports (or none) for an unattributed area-presence "
+            "assessment. No time has elapsed."
+        )
+
+
+def _domain_matches_assessment(kind, assessment):
+    if assessment == "submerged_present":
+        return kind == "submerged"
+    if assessment == "surface_or_biologic":
+        return kind in ("surface", "biologic")
+    return None
+
+
+def _evaluate_mission_assessment(sent, state):
+    """Score a transmitted assessment after the exercise ends.
+
+    Presence is corridor-level. Track association asks whether the cited
+    contact belongs to a submerged actor. Classification asks whether the
+    assessment label matches that contact's true domain. Accidental
+    correctness is a right presence answer on the wrong track. Unresolved
+    and area-presence assessments leave the track axes unset. Shore reports
+    never invent a track link.
+    """
+    scope = sent.get("scope") or _assessment_scope(sent["basis"], state["reports"])
+    evaluation = {
+        **sent,
+        "scope": scope,
+        "correct_presence": None,
+        "correct_track_association": None,
+        "correct_classification": None,
+        "accidental_correctness": None,
+    }
+    assessment = sent["assessment"]
+    if assessment == "unresolved":
+        evaluation["interpretation"] = (
+            "Unresolved assessment: presence, track association, and "
+            "classification are not scored."
+        )
+        return evaluation
+
+    submerged_exists = any(
+        contact_kind(actor) == "submerged" for actor in state["actors"]
+    )
+    correct_presence = (assessment == "submerged_present") == submerged_exists
+    evaluation["correct_presence"] = correct_presence
+
+    if scope["kind"] != "track" or not scope.get("contact"):
+        evaluation["accidental_correctness"] = False
+        evaluation["interpretation"] = (
+            "Unattributed area-presence assessment; cited shore or intel "
+            "reports stay unassociated with sonar tracks."
+        )
+        return evaluation
+
+    track = next(
+        (entry for entry in state["tracks"] if entry["id"] == scope["contact"]),
+        None,
+    )
+    if track is None:
+        evaluation["correct_track_association"] = False
+        evaluation["correct_classification"] = False
+        evaluation["accidental_correctness"] = bool(correct_presence)
+        evaluation["interpretation"] = (
+            "Cited contact was not present in the final track table."
+        )
+        return evaluation
+
+    actor = next(entry for entry in state["actors"] if entry["id"] == track["actor"])
+    kind = contact_kind(actor)
+    correct_association = kind == "submerged"
+    correct_classification = _domain_matches_assessment(kind, assessment)
+    evaluation["correct_track_association"] = correct_association
+    evaluation["correct_classification"] = correct_classification
+    evaluation["accidental_correctness"] = bool(correct_presence) and not correct_association
+    evaluation["interpretation"] = (
+        "Presence is corridor-level. Track association and classification "
+        "are scored against the hidden actor of the cited contact only after "
+        "the exercise ends."
+    )
+    return evaluation
+
+
 def _validate_employment(order, state):
     """Reject a launch before any inventory change or elapsed time."""
     require(order, "weapon")
@@ -2132,7 +2245,7 @@ def validate_order(raw, state):
             raise ValueError("Transmission requires assessment: submerged_present, surface_or_biologic, or unresolved.")
         if not isinstance(order["message"], str) or not 1 <= len(order["message"]) <= 4000:
             raise ValueError("Transmission requires a message of 1 to 4000 characters.")
-        _require_basis(order, state)
+        _require_assessment_basis(order, state)
     elif {"assessment", "message"} & set(raw):
         raise ValueError("Assessment and message fields require transmit activity.")
     if activity == "employ":
@@ -2583,24 +2696,16 @@ def _barrier_outcomes(state):
     }
 
 
-def _station_outcomes(state, initial_state):
+def _station_outcomes(state):
     schedule = state["schedule"]
     relief = schedule["relief"]
     timely = [
         sent for sent in state["sent"]
         if sent["elapsed_minutes"] <= schedule["report_due_minutes"]
     ]
-    primary_kind = contact_kind(initial_state["actors"][0])
-    evaluations = []
-    for sent in state["sent"]:
-        accurate = None if sent["assessment"] == "unresolved" else (
-            sent["assessment"] == "submerged_present"
-        ) == (primary_kind == "submerged")
-        evaluations.append({
-            **sent,
-            "matches_hidden_presence": accurate,
-            "interpretation": "Outcome accuracy only; evaluate the judgment against the cited evidence separately.",
-        })
+    evaluations = [
+        _evaluate_mission_assessment(sent, state) for sent in state["sent"]
+    ]
     at_relief = (
         distance(state["own"], {"x": relief["x"], "y": relief["y"]}) <= relief["radius_nm"]
         if state["t"] == schedule["end_minutes"] else None
@@ -2626,7 +2731,7 @@ def _debrief_outcomes(game):
     elif state.get("barrier"):
         outcomes = _barrier_outcomes(state)
     else:
-        outcomes = _station_outcomes(state, game["initial_state"])
+        outcomes = _station_outcomes(state)
     outcomes["casualties"] = [
         {"id": entity["id"], **copy.deepcopy(entity["casualty"])}
         for entity in (state["own"], *state["actors"])

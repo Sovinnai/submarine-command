@@ -224,7 +224,15 @@ countermeasure changes own-ship source level.
 The debrief keeps four accounts: decision quality from the order and the
 reports it cited, the evidence named at the time, the draw and the probability
 that produced each uncertain result, and engine errors. A verified replay
-leaves the engine-error list empty.
+leaves the engine-error list empty. For a transmitted corridor assessment the
+debrief also separates correct presence, correct track association, correct
+classification of the cited contact, and accidental correctness. Citing a
+sonar track makes a track-specific classification; citing only shore or intel
+reports, or citing none, makes an unattributed area-presence assessment.
+Independent shore reports stay unassociated with sonar tracks until play
+records an explicit evidence-based correlation. Unresolved remains a scored
+non-answer. Hidden track-to-actor links stay out of public reports until the
+exercise ends.
 
 ## What makes a good session
 
