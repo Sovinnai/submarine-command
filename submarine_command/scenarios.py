@@ -22,15 +22,15 @@ GLASS_MISSION = {
     "relief": "Be within 3 nautical miles of station RELIEF (24 east, 0 north) at 0800.",
     "chart": "Local grid in nautical miles: east is +x, north is +y. Patrol corridor: x=0 to 22, y=-6 to +6. All charted water is deep enough for the game envelope.",
     "orders": "Observe and report. Preserve discretion and meet the relief commitment. No offensive weapons employment is authorized in this patrol.",
-    "intel": "0200 shore estimate: submerged transit in the corridor; no reliable identification or contact solution. Commercial and survey traffic also use the passage.",
-    "radio": "An intelligence update is scheduled for 0330; a later update for 0510. Messages remain dated reports available for retrieval. A mast receive can copy one once its scheduled time has passed. A buoyant receive adds that mode's published delivery latency.",
+    "intel": "0200 shore estimate: submerged transit in the corridor. Commercial and survey traffic also use the passage.",
+    "radio": "An intelligence update is scheduled for 0330; a later update for 0510. A mast receive can copy one once its scheduled time has passed. A buoyant receive adds that mode's published delivery latency.",
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
 }
 
 MILLER_MISSION = {
     "title": "Operation Miller Line",
     "own_ship": "Kestrel",
-    "setting": "Fictional barrier watch on the Miller Line. This is not a search for an unknown contact and there is no relief station.",
+    "setting": "Fictional barrier watch on the Miller Line. No relief station.",
     "task": (
         "Detect a submerged boat as it crosses the Miller Line. "
         "A surface crossing does not end the watch. "
@@ -49,14 +49,14 @@ MILLER_MISSION = {
     ),
     "intel": (
         "A submerged westbound transit is expected to cross during the watch, in one sector. "
-        "A shore plot names a sector. The plot is not authoritative and is not a track. "
+        "A shore plot names a sector. "
         "Expect loud surface traffic in the other sector before the submerged crossing."
     ),
     "radio": (
         "A sector plot is scheduled for 0120. An operations reminder is scheduled for 0330. "
         "A mast receive can copy one once its scheduled time has passed. "
         "A buoyant receive adds that mode's published delivery latency and then limits depth and speed until retrieval. "
-        "Sending an assessment is not the assigned task. A mast transmission is interceptable by a surface combatant inside the published range."
+        "A mast transmission is interceptable by a surface combatant inside the published range."
     ),
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
     "simplifications": (
@@ -146,8 +146,7 @@ class Scenario:
             },
             "selection": (
                 "Opposing entities are drawn at initialization and remain hidden "
-                "until supported observations identify them. The brief does not "
-                "state which draw this patrol received."
+                "until supported observations identify them."
             ),
         }
         relief = self.schedule.relief
@@ -249,8 +248,8 @@ def _place_glass(state, dice, make_entity):
         "biologic": "Coastal watch reports biological activity in the eastern approach.",
     }[shore_type]
     state["bulletins"] = [
-        {"id": "INTEL-0330", "available": 20, "text": "0330 intelligence update: " + estimate + " Source confidence: moderate; exact track unavailable. This is an independent shore report, not confirmed identification."},
-        {"id": "OPS-0510", "available": 120, "text": "0510 operations update: assessment deadline 0730 and relief station time 0800 remain unchanged. Commercial schedules are incomplete; absence from the list does not establish military identity."},
+        {"id": "INTEL-0330", "available": 20, "text": "0330 intelligence update: " + estimate + " Source confidence: moderate."},
+        {"id": "OPS-0510", "available": 120, "text": "0510 operations update: assessment deadline 0730 and relief station time 0800 remain unchanged."},
     ]
 
 
@@ -369,15 +368,14 @@ def _place_miller(state, dice, make_entity):
             "text": (
                 "0120 shore plot: the submerged transit is estimated in the "
                 f"{sector_name} sector of the Miller Line, {side}. "
-                "Confidence moderate. This is not a track and it does not "
-                "give a latitude."
+                "Confidence moderate."
             ),
         },
         {
             "id": "OPS-0330",
             "available": 150,
             "text": (
-                "0330 operations update: the barrier watch still ends at 0700. "
+                "0330 operations update: the barrier watch ends at 0700. "
                 "No relief station is assigned. A surface crossing does not "
                 "close the submerged watch."
             ),
@@ -388,10 +386,7 @@ def _place_miller(state, dice, make_entity):
 CINDER_MISSION = {
     "title": "Operation Cinder Road",
     "own_ship": "Kestrel",
-    "setting": (
-        "Fictional wartime patrol against an eastbound coastal convoy. "
-        "This is not an exercise classification and not a barrier watch."
-    ),
+    "setting": "Fictional wartime patrol against an eastbound coastal convoy.",
     "task": (
         "Attack a merchant in the convoy with the wartime heavyweight "
         "before the guide passes east of x=30. The patrol ends at 2100."
@@ -399,27 +394,24 @@ CINDER_MISSION = {
     "chart": (
         "Local grid in nautical miles: east is +x, north is +y. "
         "The convoy lane is the parallel y=0, course 090. "
-        "One water depth and one sound-speed profile apply across the lane. "
-        "The lane is not a change in bathymetry."
+        "One water depth and one sound-speed profile apply across the lane."
     ),
     "orders": (
-        "Offensive employment is authorized. An employ order still names the "
+        "Offensive employment is authorized. An employ order names the "
         "round, an existing contact, the cited reports, and confirm. "
         "The launch uses that round's published envelope. "
         "There is no relief station."
     ),
     "intel": (
-        "The convoy is eastbound on the lane. The escort's side of the column is not known. "
+        "The convoy is eastbound on the lane. The escort's side of the column is unknown. "
         "Screening ahead of the column is unknown. "
-        "Ships that hold a detection fire from that detection. "
-        "A shore plot does not give a present position."
+        "Ships that hold a detection fire from that detection."
     ),
     "radio": (
         "A plot reminder is scheduled for 1630 and an operations reminder for 1830. "
         "A mast receive can copy one once its scheduled time has passed. "
         "A buoyant receive adds that mode's published delivery latency. "
-        "A mast transmission is interceptable by the escort inside the published range. "
-        "Sending an assessment does not launch a weapon."
+        "A mast transmission is interceptable by the escort inside the published range."
     ),
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
     "simplifications": (
@@ -575,9 +567,8 @@ def _place_cinder(state, dice, make_entity):
             "id": "PLOT-1630",
             "available": 30,
             "text": (
-                "1630 shore plot: the convoy is still estimated eastbound on "
-                "the charted lane. Escort station is not known. This is not a "
-                "present-position report."
+                "1630 shore plot: the convoy is estimated eastbound on "
+                "the charted lane. Escort station unknown."
             ),
         },
         {
