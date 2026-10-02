@@ -1,7 +1,7 @@
 # Scenarios
 
 A scenario is a public brief plus the hidden layout drawn when the session is
-created. The published scenarios use rules version 0.16. The same order
+created. The published scenarios use rules version 0.17. The same order
 validation, movement, acoustic measurement, communications, employment and
 replay rules apply. The capability report lists each public brief, clock and
 own-ship start. Glass Strait also lists its relief station. Miller Line lists

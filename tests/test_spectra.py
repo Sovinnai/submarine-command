@@ -1,4 +1,5 @@
 """Narrowband spectra: persistence, operating rules, measurement and replay."""
+import json
 import math
 import unittest
 
@@ -159,7 +160,7 @@ class MeasurementTests(unittest.TestCase):
 
     def test_public_measurement_is_not_the_emitted_truth(self):
         source = place(
-            MERCHANT, id="merchant", x=0.0, y=2.0, course=180.0, speed=12.0, depth=0.0
+            MERCHANT, id="merchant", x=0.0, y=0.6, course=180.0, speed=12.0, depth=0.0
         )
         measured = self._measure(source)
         public_ids = {"measured_hz", "uncertainty_hz", "quality"}
@@ -350,6 +351,231 @@ class ReportBoundaryTests(unittest.TestCase):
         ]
         self.assertEqual(spectra_first, spectra_second)
         self.assertTrue(spectra_first)
+
+
+class AspectTests(unittest.TestCase):
+    def setUp(self):
+        self.game = engine.initialize("ab" * 32)
+        self.state = self.game["state"]
+        self.state["own"].update(x=0.0, y=0.0, course=0.0, speed=0.0, depth=400.0)
+
+    def _measure(self, course, north=2.0):
+        source = place(
+            MERCHANT, id="merchant", x=0.0, y=north, course=course,
+            speed=12.0, depth=0.0, operating_mode="service",
+        )
+        return spectra.measure_contact(
+            self.state, source, self.state["own"], "passive", FixedDice(),
+        )
+
+    def _blade(self, measured):
+        return next(
+            line for line in measured["detail"]["lines"] if line["line_id"] == "blade_rate:1"
+        )
+
+    def _low_band(self, measured):
+        return next(band for band in measured["detail"]["broadband"] if band["low_hz"] == 10.0)
+
+    def test_every_class_uses_the_same_overlapping_curve(self):
+        curves = {template.aspect for template in spectra.SIGNATURES.values()}
+        self.assertEqual(curves, {acoustics.SHARED_ASPECT_CURVE})
+        self.assertEqual(acoustics.aspect_adjustment_db(0), -5.0)
+        self.assertEqual(acoustics.aspect_adjustment_db(90), 0.0)
+        self.assertEqual(acoustics.aspect_adjustment_db(180), -2.5)
+        self.assertEqual(acoustics.aspect_adjustment_db(None), 0.0)
+        self.assertAlmostEqual(acoustics.aspect_adjustment_db(45), -2.5)
+
+    def test_beam_is_louder_than_bow_at_equal_range_and_speed(self):
+        bow = self._measure(180)
+        beam = self._measure(90)
+        stern = self._measure(0)
+        other_beam = self._measure(270)
+        self.assertAlmostEqual(bow["aspect_deg"], 0.0)
+        self.assertAlmostEqual(beam["aspect_deg"], 90.0)
+        self.assertAlmostEqual(stern["aspect_deg"], 180.0)
+        self.assertAlmostEqual(beam["aspect_adjustment_db"], other_beam["aspect_adjustment_db"])
+        self.assertAlmostEqual(
+            self._blade(beam)["source_level_db"] - self._blade(bow)["source_level_db"], 5.0
+        )
+        self.assertAlmostEqual(
+            self._blade(beam)["source_level_db"] - self._blade(stern)["source_level_db"], 2.5
+        )
+        self.assertAlmostEqual(self._blade(bow)["emitted_hz"], self._blade(beam)["emitted_hz"])
+        self.assertAlmostEqual(
+            self._low_band(beam)["excess_db"] - self._low_band(bow)["excess_db"], 5.0
+        )
+        self.assertAlmostEqual(
+            self._low_band(beam)["source_level_db"] - self._low_band(bow)["source_level_db"], 5.0
+        )
+
+    def test_unchanged_aspect_leaves_source_level_unchanged(self):
+        first = self._measure(90)
+        second = self._measure(90)
+        self.assertEqual(first["aspect_adjustment_db"], second["aspect_adjustment_db"])
+        self.assertEqual(
+            [line["source_level_db"] for line in first["detail"]["lines"]],
+            [line["source_level_db"] for line in second["detail"]["lines"]],
+        )
+        self.assertEqual(
+            [band["excess_db"] for band in first["detail"]["broadband"]],
+            [band["excess_db"] for band in second["detail"]["broadband"]],
+        )
+
+    def test_constant_speed_turn_can_change_quality_without_a_blade_rate_shift(self):
+        found = None
+        for north in (1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0):
+            bow = self._measure(180, north)
+            beam = self._measure(90, north)
+            for left, right in zip(bow["detail"]["broadband"], beam["detail"]["broadband"]):
+                if left["detected"] and right["detected"] and left["quality"] != right["quality"]:
+                    found = (bow, beam, left, right)
+                    break
+            if found:
+                break
+        self.assertIsNotNone(found)
+        bow, beam, quiet, loud = found
+        self.assertAlmostEqual(self._blade(bow)["emitted_hz"], self._blade(beam)["emitted_hz"])
+        self.assertNotEqual(quiet["quality"], loud["quality"])
+        self.assertAlmostEqual(loud["excess_db"] - quiet["excess_db"], 5.0)
+
+    def test_contact_report_states_the_level_change_and_not_the_angle(self):
+        state = self.state
+        state["actors"] = []
+        state["tracks"] = []
+        state["looks"] = []
+        source = place(
+            MERCHANT, id="merchant-turn", x=0.0, y=1.2, course=90.0,
+            speed=12.0, depth=0.0, operating_mode="service",
+        )
+        spectra.assign_persistent_signature(
+            source, engine.Dice(self.game["seed"], state["rng_trace"])
+        )
+        state["actors"].append(source)
+        dice = engine.Dice(self.game["seed"], state["rng_trace"])
+        before = len(state["reports"])
+        engine.observe_contact(state, source, dice)
+        source["course"] = 180.0
+        state["t"] = 5
+        engine.observe_contact(state, source, dice)
+        sonar = state["reports"][before:]
+        sonar = [entry for entry in sonar if entry["department"] == "Sonar"]
+        self.assertEqual(len(sonar), 2)
+        update = sonar[-1]
+        self.assertIn("Received level changed", update["text"])
+        self.assertIn("-5.0 dB", update["text"])
+        level_note = update["text"].split("Received level changed", 1)[1].lower()
+        self.assertNotIn("aspect", level_note)
+        self.assertNotIn("bow", level_note)
+        self.assertNotIn("beam", level_note)
+        self.assertNotIn("stern", level_note)
+        self.assertNotRegex(level_note, r"\d+(\.\d+)? deg")
+        change = update["observation"]["level_change"]
+        self.assertNotIn("aspect_deg", change)
+        self.assertNotIn("source_level_db", change)
+        self.assertTrue(any(item["change_db"] == -5.0 for item in change["broadband"]))
+        rendered = engine.canonical(engine.public_view(self.game)).decode()
+        self.assertNotIn("aspect_deg", rendered)
+        self.assertNotIn("level_memory", rendered)
+        self.assertNotIn("source_level_db", rendered)
+        self.assertIn("level_memory", state["tracks"][0])
+        self.assertIsInstance(state["tracks"][0]["level_memory"]["lines"], list)
+        self.assertNotIn("line_id", json.dumps(state["tracks"][0]["level_memory"]))
+
+    def test_focus_does_not_change_received_level(self):
+        source = place(
+            MERCHANT, id="merchant", x=0.0, y=2.0, course=90.0,
+            speed=12.0, depth=0.0, operating_mode="service",
+        )
+        listen = spectra.measure_contact(
+            self.state, source, self.state["own"], "passive", FixedDice(),
+        )
+        focused = spectra.measure_contact(
+            self.state, source, self.state["own"], "focus", FixedDice(), focused=True,
+        )
+        elsewhere = spectra.measure_contact(
+            self.state, source, self.state["own"], "focus", FixedDice(), focused=False,
+        )
+
+        def excess(measured, line_id):
+            return next(
+                line["excess_db"] for line in measured["detail"]["lines"]
+                if line["line_id"] == line_id
+            )
+
+        self.assertAlmostEqual(
+            excess(listen, "engine_order:1"), excess(focused, "engine_order:1")
+        )
+        self.assertAlmostEqual(
+            excess(listen, "engine_order:1"), excess(elsewhere, "engine_order:1")
+        )
+        self.assertEqual(
+            spectra.integration_seconds("passive", False),
+            spectra.INTEGRATION_SECONDS["listen"],
+        )
+        self.assertGreater(
+            spectra.integration_seconds("focus", True),
+            spectra.integration_seconds("passive", False),
+        )
+        self.assertLess(
+            spectra.integration_seconds("focus", False),
+            spectra.integration_seconds("passive", False),
+        )
+
+    def test_level_change_follows_measured_frequency_not_hidden_identity(self):
+        previous = {
+            "report_id": "R1",
+            "lines": [
+                {"measured_hz": 50.0, "quality": "moderate", "excess_db": 12.0},
+                {"measured_hz": 100.0, "quality": "strong", "excess_db": 20.0},
+            ],
+            "bands": {},
+        }
+        measurement = {
+            "detail": {
+                "lines": [
+                    {
+                        "line_id": "family-high:1",
+                        "detected": True,
+                        "measured_hz": 50.2,
+                        "quality": "weak",
+                        "excess_db": 4.0,
+                    },
+                    {
+                        "line_id": "family-low:1",
+                        "detected": True,
+                        "measured_hz": 100.1,
+                        "quality": "strong",
+                        "excess_db": 19.5,
+                    },
+                ],
+                "broadband": [],
+            }
+        }
+        change = spectra.received_level_change(previous, measurement)
+        by_frequency = {line["to_hz"]: line for line in change["lines"]}
+        self.assertEqual(by_frequency[50.2]["from_hz"], 50.0)
+        self.assertEqual(by_frequency[50.2]["quality_from"], "moderate")
+        self.assertAlmostEqual(by_frequency[50.2]["change_db"], -8.0)
+        self.assertEqual(by_frequency[100.1]["from_hz"], 100.0)
+        self.assertAlmostEqual(by_frequency[100.1]["change_db"], -0.5)
+        jumped = {
+            "detail": {
+                "lines": [{
+                    "line_id": "blade_rate:1",
+                    "detected": True,
+                    "measured_hz": 70.0,
+                    "quality": "strong",
+                    "excess_db": 10.0,
+                }],
+                "broadband": [],
+            }
+        }
+        lone = {
+            "report_id": "R1",
+            "lines": [{"measured_hz": 50.0, "quality": "strong", "excess_db": 15.0}],
+            "bands": {},
+        }
+        self.assertIsNone(spectra.received_level_change(lone, jumped))
 
 
 if __name__ == "__main__":

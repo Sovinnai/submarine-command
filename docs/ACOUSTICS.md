@@ -129,12 +129,16 @@ is one receiver's history; detections on another receiver are not automatically
 the same contact. A visual sighting is its own history.
 
 Opposing detection uses the same TL function. Own-ship radiated source level
-follows speed and the achieved operating mode's `relative_noise`, using the
-same 10 log10 mode term opposing emitters already use. At standard plant the
-mode term is 0 dB, so prior balance is unchanged. Own-ship self-noise for
-reception also includes that mode term, scaled by each receiver's
-`pump_coupling`, so a quieter plant improves listening as well as
-counter-detection.
+follows speed, the achieved operating mode's `relative_noise`, and the shared
+aspect curve. The mode term is the same 10 log10 factor opposing emitters
+already use. At standard plant the mode term is 0 dB. Aspect adds the
+published bow, beam or stern offset for the angle between own-ship heading
+and the opponent; beam is 0 dB, so a beam presentation keeps the previous
+level. Active transmission does not apply aspect. Own-ship self-noise for
+reception includes the mode term, scaled by each receiver's `pump_coupling`,
+and does not include aspect. A quieter plant improves listening as well as
+counter-detection. The contact report and the opponent's detection record do
+not state the aspect angle.
 
 A 20-minute acoustic window applies one correlated quality draw to every
 contact. Repeated looks inside that window are not independent evidence.

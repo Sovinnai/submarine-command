@@ -44,7 +44,7 @@ SUPERVISOR_SIGMA = 3.0
 DOPPLER_FRACTION_LIMIT = 0.03
 # Same-line pairing. Wider than the Doppler cue so a modest residual still
 # compares as one line; narrower than a harmonic jump.
-SAME_LINE_ASSOCIATION_FRACTION = 0.10
+SAME_LINE_ASSOCIATION_FRACTION = spectra.SAME_LINE_ASSOCIATION_FRACTION
 # Family-wide jumps (blade rate, missing harmonic) when no line stayed put.
 LINE_ASSOCIATION_FRACTION = 0.75
 _RANGE_INDEX = {value: index for index, value in enumerate(RANGE_GRID_NM)}
@@ -129,7 +129,8 @@ def frequency_change_model():
     return {
         "modeled": True,
         "hidden_motion_used": False,
-        "aspect_modeled": False,
+        "aspect_modeled": True,
+        "aspect_angle_reported": False,
         "confirmed_maneuver": False,
         "sound_speed_m_s": SOUND_SPEED_MPS,
         "operator_sigma": OPERATOR_SIGMA,
@@ -162,8 +163,10 @@ def frequency_change_model():
             "such as blade rate or machinery, because it exceeds the Doppler bound."
         ),
         "aspect": (
-            "Received level does not depend on bow, beam, or stern aspect. "
-            "Quality is reported with the matched line and is not itself a zig call."
+            "Received level follows one published bow, beam and stern curve "
+            "shared by every emitter. Quality on a matched line can change "
+            "when that level changes. This indication does not read or report "
+            "the aspect angle, and quality alone is not a frequency-change call."
         ),
     }
 
@@ -1163,25 +1166,7 @@ def _within_fraction(left, right, fraction):
 
 def _greedy_line_pairs(earlier, later, fraction):
     """Closest unpaired lines whose frequencies differ by at most fraction."""
-    pairs = sorted(
-        (
-            (abs(left["measured_hz"] - right["measured_hz"]), left_index, right_index)
-            for left_index, left in enumerate(earlier)
-            for right_index, right in enumerate(later)
-        ),
-        key=lambda item: item[0],
-    )
-    used_left, used_right = set(), set()
-    matched = []
-    for _difference, left_index, right_index in pairs:
-        if left_index in used_left or right_index in used_right:
-            continue
-        if not _within_fraction(earlier[left_index], later[right_index], fraction):
-            continue
-        used_left.add(left_index)
-        used_right.add(right_index)
-        matched.append((earlier[left_index], later[right_index]))
-    return matched, len(earlier) - len(used_left), len(later) - len(used_right)
+    return spectra.pair_measured_lines(earlier, later, fraction)
 
 
 def _frequency_order_pairs(earlier, later, fraction):
@@ -1403,7 +1388,8 @@ def frequency_change_assessment(observations, elapsed_minutes=None):
     notes = [
         "The indication uses measured frequencies and the recorded own-ship track. "
         "It does not confirm a contact maneuver and it does not solve course or speed.",
-        "Received level does not depend on aspect, so a bow or beam turn is not a level cue here.",
+        "A received-level change can follow aspect, range or noise. "
+        "The aspect angle is not reported, and quality alone is not a frequency-change call.",
     ]
     if operator["indicated"] and not supervisor["indicated"]:
         notes.append(
