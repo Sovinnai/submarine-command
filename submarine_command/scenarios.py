@@ -20,10 +20,10 @@ GLASS_MISSION = {
     "setting": "Fictional ceasefire verification patrol in the Lydian Passage.",
     "task": "Assess whether submerged traffic is using the patrol corridor and send an evidence-based assessment by 0730.",
     "relief": "Be within 3 nautical miles of station RELIEF (24 east, 0 north) at 0800.",
-    "chart": "Local grid in nautical miles: east is +x, north is +y. Patrol corridor: x=0 to 22, y=-6 to +6. All charted water is deep enough for the game envelope.",
+    "chart": "Local grid in nautical miles: east is +x, north is +y. Patrol corridor: x=0 to 22, y=-6 to +6. All charted water is deep enough for the hull.",
     "orders": "Observe and report. Preserve discretion and meet the relief commitment. No offensive weapons employment is authorized in this patrol.",
     "intel": "0200 shore estimate: submerged transit in the corridor. Commercial and survey traffic also use the passage.",
-    "radio": "An intelligence update is scheduled for 0330; a later update for 0510. A mast receive can copy one once its scheduled time has passed. A buoyant receive adds that mode's published delivery latency.",
+    "radio": "An intelligence update is scheduled for 0330; a later update for 0510. Mast receive can copy a bulletin after its scheduled time. Buoyant receive adds that mode's delivery latency.",
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
 }
 
@@ -44,19 +44,19 @@ MILLER_MISSION = {
     ),
     "orders": (
         "Hold the barrier and observe. No offensive weapons employment is authorized. "
-        "Crossing east of the line leaves the assigned side and is recorded. "
+        "Crossing east of the line leaves the assigned side. "
         "There is no station to reach."
     ),
     "intel": (
         "A submerged westbound transit is expected to cross during the watch, in one sector. "
-        "A shore plot names a sector. "
+        "A shore plot will name a sector. "
         "Expect loud surface traffic in the other sector before the submerged crossing."
     ),
     "radio": (
         "A sector plot is scheduled for 0120. An operations reminder is scheduled for 0330. "
-        "A mast receive can copy one once its scheduled time has passed. "
-        "A buoyant receive adds that mode's published delivery latency and then limits depth and speed until retrieval. "
-        "A mast transmission is interceptable by a surface combatant inside the published range."
+        "Mast receive can copy a bulletin after its scheduled time. "
+        "Buoyant receive adds that mode's delivery latency and then limits depth and speed until retrieval. "
+        "A mast transmission can be intercepted by a surface combatant within radio range."
     ),
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
     "simplifications": (
@@ -397,28 +397,28 @@ CINDER_MISSION = {
         "One water depth and one sound-speed profile apply across the lane."
     ),
     "orders": (
-        "Offensive employment is authorized. An employ order names the "
-        "round, an existing contact, the cited reports, and confirm. "
-        "The launch uses that round's published envelope. "
+        "Offensive employment is authorized. Fire the wartime heavyweight on a merchant "
+        "contact; cite the supporting reports and confirm. "
+        "Stay inside the weapon's depth and speed envelope. "
         "There is no relief station."
     ),
     "intel": (
         "The convoy is eastbound on the lane. The escort's side of the column is unknown. "
-        "Screening ahead of the column is unknown. "
-        "A held detection draws fire."
+        "Whether a submarine is screening ahead is unknown. "
+        "Enemy ships may fire if Kestrel is counter-detected."
     ),
     "radio": (
         "A plot reminder is scheduled for 1630 and an operations reminder for 1830. "
-        "A mast receive can copy one once its scheduled time has passed. "
-        "A buoyant receive adds that mode's published delivery latency. "
-        "A mast transmission is interceptable by the escort inside the published range."
+        "Mast receive can copy a bulletin after its scheduled time. "
+        "Buoyant receive adds that mode's delivery latency. "
+        "A mast transmission can be intercepted by the escort within radio range."
     ),
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
     "simplifications": (
         "Merchants hold course and speed until a weapon casualty stops them. "
         "The escort holds station unless it fires or a casualty stops it. "
-        "A homing round then runs under the published employment rule. "
-        "A mast sighting inside the published visual range can read a name."
+        "A homing round then runs under the weapon's employment rule. "
+        "A close mast sighting can read a name."
     ),
 }
 
