@@ -570,6 +570,44 @@ class BoundedPlanTests(unittest.TestCase):
         self.assertIn("towed_array", str(raised.exception))
         self.assertEqual(before, e.canonical(self.game))
 
+    def test_plan_projection_credits_only_productive_stream_minutes(self):
+        # From 20 knots, a 15-minute stream ordered at 8 knots does not finish:
+        # deceleration burns part of the window outside the deploy envelope.
+        self.game["state"]["own"]["speed"] = 20.0
+        self.game["state"]["ordered"]["speed"] = 20.0
+        self.game["state"]["own"]["operating_mode"] = "high_power"
+        self.game["state"]["ordered"]["operating_mode"] = "high_power"
+        before = e.canonical(self.game)
+        with self.assertRaises(ValueError) as raised:
+            e.validate_order(
+                self.plan_order(
+                    [
+                        {
+                            "label": "stream",
+                            "command": self.base_command(
+                                activity="stream_array",
+                                minutes=15,
+                                speed=8,
+                                operating_mode="standard",
+                            ),
+                        },
+                        {
+                            "label": "recover",
+                            "command": self.base_command(
+                                activity="recover_array",
+                                minutes=10,
+                                speed=5,
+                                operating_mode="standard",
+                            ),
+                        },
+                    ],
+                    id="fast-stream",
+                ),
+                self.game["state"],
+            )
+        self.assertIn("stream", str(raised.exception).lower())
+        self.assertEqual(before, e.canonical(self.game))
+
     def test_plan_validates_skip_branch_envelope_state(self):
         e.apply_order(
             self.game,

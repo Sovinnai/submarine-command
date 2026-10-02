@@ -2029,66 +2029,89 @@ def _patrol_allows(state, rule):
 
 
 def project_plan_step_envelopes(state, command):
-    """Apply only deterministic envelope effects for plan-path validation.
+    """Apply deterministic kinematics and envelope progress for plan validation.
 
-    Updates ordered settings, towed/antenna deployment progress and inventory.
-    Does not move platforms, create tracks, write reports or draw randomness.
+    Uses the same productive-minute integration as live ticks (advance_own), so a
+    stream that starts above deploy speed only credits minutes actually spent
+    inside the envelope. Does not create tracks, write reports or draw
+    randomness.
     """
     ordered = {field: float(command[field]) for field in ("course", "speed", "depth")}
     ordered["operating_mode"] = command["operating_mode"]
     state["ordered"] = ordered
+    remaining = command["minutes"]
+    while remaining > 0:
+        span = min(TICK, remaining)
+        remaining -= span
+        achieved = advance_own(state, span)
+        settle_operating_mode(state)
+        _project_tick_activity(state, command, achieved)
+
+
+def _project_tick_activity(state, command, achieved):
+    """Credit one projected tick of equipment progress from productive minutes."""
     activity = command["activity"]
-    minutes = command["minutes"]
-    speed = float(command["speed"])
-    if activity == "stream_array" and state.get("towed") is not None:
+    if activity in ("stream_array", "recover_array") and state.get("towed") is not None:
         spec = arrays.TOWED
         record = state["towed"]
-        if (
-            speed <= spec.deploy_speed_knots
-            and record["deployment"] in (arrays.STOWED, arrays.STREAMING)
-        ):
-            progress = record["progress_minutes"] + minutes
-            if progress >= spec.deployment_minutes:
-                _set_towed(state, arrays.STREAMED, 0)
-            else:
-                _set_towed(state, arrays.STREAMING, progress)
-    elif activity == "recover_array" and state.get("towed") is not None:
-        spec = arrays.TOWED
-        record = state["towed"]
-        if (
-            speed <= spec.deploy_speed_knots
-            and record["deployment"] in (arrays.STREAMED, arrays.RECOVERING)
-        ):
-            progress = record["progress_minutes"] + minutes
+        inside = achieved["envelopes"].get("towed_array", 0.0)
+        if activity == "stream_array":
+            if record["deployment"] == arrays.STREAMED:
+                return
+            if record["deployment"] == arrays.STOWED:
+                _set_towed(state, arrays.STREAMING, record["progress_minutes"])
+                record = state["towed"]
+            if record["deployment"] == arrays.STREAMING:
+                progress = record["progress_minutes"] + inside
+                if progress >= spec.deployment_minutes:
+                    _set_towed(state, arrays.STREAMED, 0)
+                else:
+                    _set_towed(state, arrays.STREAMING, progress)
+            return
+        if record["deployment"] == arrays.STOWED:
+            return
+        if record["deployment"] == arrays.STREAMED:
+            _set_towed(state, arrays.RECOVERING, 0)
+            record = state["towed"]
+        if record["deployment"] == arrays.RECOVERING:
+            progress = record["progress_minutes"] + inside
             if progress >= spec.retrieval_minutes:
                 _set_towed(state, arrays.STOWED, 0, unstable_until=0)
             else:
                 _set_towed(state, arrays.RECOVERING, progress)
-    elif activity in ("receive", "transmit", "retrieve"):
+        return
+    if activity in ("receive", "transmit", "retrieve"):
         mode = entity_spec(state["own"]).link_mode(command["link"])
-        if mode.persists_deployed and mode.allows(command["depth"], command["speed"]):
-            record = state["antennas"][mode.antenna]
-            if activity == "retrieve" and record["deployment"] != "stowed":
-                progress = record["progress_minutes"] + minutes
-                if record["deployment"] != "retrieving":
-                    progress = minutes
-                if progress >= mode.retrieval_minutes:
-                    _set_antenna(state, mode.antenna, "stowed", 0)
-                else:
-                    _set_antenna(state, mode.antenna, "retrieving", progress)
-            elif activity == "receive" and record["deployment"] in ("stowed", "deploying"):
-                progress = record["progress_minutes"] + minutes
-                if progress >= mode.deployment_minutes:
-                    _set_antenna(state, mode.antenna, "streamed", 0)
-                else:
-                    _set_antenna(state, mode.antenna, "deploying", progress)
-    elif activity == "employ" and command.get("confirm") is True:
+        if not mode.persists_deployed:
+            return
+        inside = achieved["envelopes"].get(mode.identifier, 0.0)
+        record = state["antennas"][mode.antenna]
+        if activity == "retrieve" and record["deployment"] != "stowed":
+            if record["deployment"] != "retrieving":
+                progress = inside
+            else:
+                progress = record["progress_minutes"] + inside
+            if progress >= mode.retrieval_minutes:
+                _set_antenna(state, mode.antenna, "stowed", 0)
+            else:
+                _set_antenna(state, mode.antenna, "retrieving", progress)
+            return
+        if activity == "receive" and record["deployment"] in ("stowed", "deploying"):
+            progress = record["progress_minutes"] + inside
+            if progress >= mode.deployment_minutes:
+                _set_antenna(state, mode.antenna, "streamed", 0)
+            else:
+                _set_antenna(state, mode.antenna, "deploying", progress)
+            return
+    if activity == "employ" and command.get("confirm") is True:
         weapon = command["weapon"]
         remaining = state["own"]["inventory"].get(weapon, 0)
-        if remaining > 0:
-            rule = entity_spec(state["own"]).employment(weapon)
-            if rule.allows(command["depth"], command["speed"]):
-                state["own"]["inventory"][weapon] = remaining - 1
+        if remaining <= 0:
+            return
+        rule = entity_spec(state["own"]).employment(weapon)
+        inside = achieved["envelopes"].get(f"weapon:{rule.identifier}", 0.0)
+        if inside >= TICK:
+            state["own"]["inventory"][weapon] = remaining - 1
 
 
 def validate_order(raw, state, seed=None, *, allow_plan_step_id=False):
