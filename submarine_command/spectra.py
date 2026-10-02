@@ -289,6 +289,11 @@ def public_model():
             "The logistic of signal excess used for other reception, including "
             "its ceiling and the absence of an independent detection floor."
         ),
+        "focus": (
+            "Focus sets integration time to 180 s on the named receiver history "
+            "and 20 s on other contacts in that step. It does not add "
+            "directivity and does not change received level or reported quality."
+        ),
         "doppler": (
             "The reported center, before noise, is f * (c + v_receiver) / "
             "(c + v_source) on the horizontal line of sight. c is the true "

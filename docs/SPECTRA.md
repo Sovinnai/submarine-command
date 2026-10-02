@@ -80,7 +80,7 @@ For each emitted line, at the source and receiver depths actually held:
    Broadband analysis bands use 8 dB and the same noise level at the band
    center; this rules version does not integrate a noise density across the
    band. Directivity is the listening array's published value, reduced at
-   towed endfire, plus the existing focus adjustment. Hull and flank use keel
+   towed endfire. Focus does not add directivity. Hull and flank use keel
    depth; a streamed towed array uses the published keel offset.
 4. Detection probability is the same logistic used for other reception, with
    its ceiling and with no independent floor.

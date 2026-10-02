@@ -343,23 +343,16 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(len(track["observations"]), before)
         self.assertEqual(len(state["rng_trace"]), before_trace)
 
-    def test_focus_does_not_raise_another_receiver_of_the_same_emitter(self):
+    def test_focus_selects_one_receiver_history_without_a_level_offset(self):
         game = e.initialize("ab" * 32)
         state = game["state"]
         hull = next(tr for tr in state["tracks"] if tr.get("receiver_id") == "hull_array")
-        self.assertEqual(
-            e._focus_directivity_db(state, {"id": hull["actor"]}, "focus", "hull_array"),
-            -2.0,
-        )
+        actor = {"id": hull["actor"]}
+        self.assertFalse(e._focused_on(state, actor, "focus", "hull_array"))
         state["focus"] = hull["id"]
-        self.assertEqual(
-            e._focus_directivity_db(state, {"id": hull["actor"]}, "focus", "hull_array"),
-            2.0,
-        )
-        self.assertEqual(
-            e._focus_directivity_db(state, {"id": hull["actor"]}, "focus", "flank_array"),
-            -2.0,
-        )
+        self.assertTrue(e._focused_on(state, actor, "focus", "hull_array"))
+        self.assertFalse(e._focused_on(state, actor, "focus", "flank_array"))
+        self.assertFalse(e._focused_on(state, actor, "passive", "hull_array"))
 
     def test_mast_sighting_is_not_attached_to_an_acoustic_track(self):
         game = e.initialize("ab" * 32)

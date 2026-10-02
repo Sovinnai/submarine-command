@@ -481,6 +481,46 @@ class AspectTests(unittest.TestCase):
         self.assertIsInstance(state["tracks"][0]["level_memory"]["lines"], list)
         self.assertNotIn("line_id", json.dumps(state["tracks"][0]["level_memory"]))
 
+    def test_focus_does_not_change_received_level(self):
+        source = place(
+            MERCHANT, id="merchant", x=0.0, y=2.0, course=90.0,
+            speed=12.0, depth=0.0, operating_mode="service",
+        )
+        listen = spectra.measure_contact(
+            self.state, source, self.state["own"], "passive", FixedDice(),
+        )
+        focused = spectra.measure_contact(
+            self.state, source, self.state["own"], "focus", FixedDice(), focused=True,
+        )
+        elsewhere = spectra.measure_contact(
+            self.state, source, self.state["own"], "focus", FixedDice(), focused=False,
+        )
+
+        def excess(measured, line_id):
+            return next(
+                line["excess_db"] for line in measured["detail"]["lines"]
+                if line["line_id"] == line_id
+            )
+
+        self.assertAlmostEqual(
+            excess(listen, "engine_order:1"), excess(focused, "engine_order:1")
+        )
+        self.assertAlmostEqual(
+            excess(listen, "engine_order:1"), excess(elsewhere, "engine_order:1")
+        )
+        self.assertEqual(
+            spectra.integration_seconds("passive", False),
+            spectra.INTEGRATION_SECONDS["listen"],
+        )
+        self.assertGreater(
+            spectra.integration_seconds("focus", True),
+            spectra.integration_seconds("passive", False),
+        )
+        self.assertLess(
+            spectra.integration_seconds("focus", False),
+            spectra.integration_seconds("passive", False),
+        )
+
     def test_level_change_follows_measured_frequency_not_hidden_identity(self):
         previous = {
             "report_id": "R1",
