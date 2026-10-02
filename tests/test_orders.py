@@ -313,7 +313,7 @@ class BoundedPlanTests(unittest.TestCase):
             id="interrupted-plan",
             expected_turn=1,
         )
-        order = e.validate_order(raw, state, seed=self.game["seed"])
+        order = e.validate_order(raw, state)
         real_tick = e.tick_world
 
         def tick_with_loss(current, dice, current_order, first_tick):
@@ -377,7 +377,7 @@ class BoundedPlanTests(unittest.TestCase):
             id="stop-plan",
             expected_turn=1,
         )
-        stop_order = e.validate_order(stop_plan, stop_state, seed=self.game["seed"])
+        stop_order = e.validate_order(stop_plan, stop_state)
         stopped = e.simulate(stop_state, self.game["seed"], stop_order)
         self.assertEqual(stopped["stop_reason"], "condition_unmet")
         self.assertEqual(stopped["elapsed_minutes"], 0)
@@ -404,7 +404,7 @@ class BoundedPlanTests(unittest.TestCase):
             id="skip-plan",
             expected_turn=1,
         )
-        skip_order = e.validate_order(skip_plan, skip_state, seed=self.game["seed"])
+        skip_order = e.validate_order(skip_plan, skip_state)
         skipped = e.simulate(skip_state, self.game["seed"], skip_order)
         self.assertEqual(skipped["stop_reason"], "plan_complete")
         self.assertEqual(
@@ -508,9 +508,7 @@ class BoundedPlanTests(unittest.TestCase):
             for _ in range(orders.MAX_PLAN_STEPS + 1)
         ]
         with self.assertRaises(ValueError) as raised:
-            e.validate_order(
-                self.plan_order(steps), self.game["state"], seed=self.game["seed"]
-            )
+            e.validate_order(self.plan_order(steps), self.game["state"])
         self.assertIn(str(orders.MAX_PLAN_STEPS), str(raised.exception))
 
     def test_plan_replay_is_deterministic(self):
@@ -528,7 +526,6 @@ class BoundedPlanTests(unittest.TestCase):
         self.assertTrue(e.verify(first)["verified"])
 
     def test_plan_validates_later_steps_against_projected_envelopes(self):
-        # Stream then recover is legal once the first step has completed.
         recover = self.plan_order(
             [
                 {
@@ -546,9 +543,8 @@ class BoundedPlanTests(unittest.TestCase):
             ],
             id="stream-recover",
         )
-        e.validate_order(recover, self.game["state"], seed=self.game["seed"])
+        e.validate_order(recover, self.game["state"])
 
-        # Stream then above the streamed speed limit is illegal after the array is out.
         before = e.canonical(self.game)
         with self.assertRaises(ValueError) as raised:
             e.apply_order(
@@ -574,7 +570,7 @@ class BoundedPlanTests(unittest.TestCase):
         self.assertIn("towed_array", str(raised.exception))
         self.assertEqual(before, e.canonical(self.game))
 
-    def test_planned_employ_keeps_a_stable_action_id(self):
+    def test_plan_validates_skip_branch_envelope_state(self):
         e.apply_order(
             self.game,
             {
@@ -589,7 +585,84 @@ class BoundedPlanTests(unittest.TestCase):
                 "operating_mode": "standard",
             },
         )
-        # Use a disposable countermeasure so no target contact is required.
+        contact = self.game["state"]["tracks"][0]["id"]
+        before = e.canonical(self.game)
+        with self.assertRaises(ValueError) as raised:
+            e.apply_order(
+                self.game,
+                self.plan_order(
+                    [
+                        {
+                            "label": "stream",
+                            "command": self.base_command(
+                                activity="stream_array", minutes=15, speed=5
+                            ),
+                        },
+                        {
+                            "label": "maybe-recover",
+                            "when": {"contact": {"id": contact, "status": "stale"}},
+                            "else": "skip",
+                            "command": self.base_command(
+                                activity="recover_array", minutes=10, speed=5
+                            ),
+                        },
+                        {
+                            "label": "sprint",
+                            "command": self.base_command(
+                                minutes=5, speed=14, operating_mode="high_power"
+                            ),
+                        },
+                    ],
+                    id="skip-branch",
+                    expected_turn=1,
+                ),
+            )
+        self.assertIn("towed_array", str(raised.exception))
+        self.assertEqual(before, e.canonical(self.game))
+
+    def test_plan_validation_does_not_reveal_hidden_contacts(self):
+        before_tracks = len(self.game["state"]["tracks"])
+        before_reports = len(self.game["state"]["reports"])
+        before = e.canonical(self.game)
+        with self.assertRaises(ValueError) as raised:
+            e.validate_order(
+                self.plan_order(
+                    [
+                        {"command": self.base_command(minutes=15)},
+                        {
+                            "command": self.base_command(
+                                activity="focus", focus="S99", minutes=5
+                            )
+                        },
+                    ],
+                    id="probe",
+                ),
+                self.game["state"],
+            )
+        self.assertIn("existing contact", str(raised.exception).lower())
+        self.assertEqual(before, e.canonical(self.game))
+        self.assertEqual(len(self.game["state"]["tracks"]), before_tracks)
+        self.assertEqual(len(self.game["state"]["reports"]), before_reports)
+
+    def test_reserved_plan_step_ids_rejected_for_top_level_orders(self):
+        with self.assertRaises(ValueError) as raised:
+            e.validate_order(
+                {
+                    "id": "#taken:0",
+                    "expected_turn": 0,
+                    "activity": "listen",
+                    "minutes": 5,
+                    "interrupt_on": [],
+                    "course": 90,
+                    "speed": 5,
+                    "depth": 400,
+                    "operating_mode": "standard",
+                },
+                self.game["state"],
+            )
+        self.assertIn("reserved", str(raised.exception).lower())
+
+    def test_planned_employ_keeps_a_stable_action_id(self):
         before_inventory = self.game["state"]["own"]["inventory"]["mobile_decoy"]
         raw = self.plan_order(
             [
@@ -608,19 +681,20 @@ class BoundedPlanTests(unittest.TestCase):
                 }
             ],
             id="employ-plan",
-            expected_turn=1,
         )
         result = e.apply_order(self.game, raw)
         step = result["last_execution"]["plan"]["executed_steps"][0]
         self.assertEqual(
             self.game["events"][-1]["order"]["plan"]["steps"][0]["command"]["id"],
-            "employ-plan:step-0",
+            "#employ-plan:0",
         )
         self.assertEqual(
             self.game["state"]["own"]["inventory"]["mobile_decoy"],
             before_inventory - 1,
         )
         self.assertIn(step["stop_reason"], ("task_complete", "requested_interval_complete"))
+        quality = e._adjudication(self.game)["decision_quality"]
+        self.assertTrue(any(item["order_id"] == "#employ-plan:0" for item in quality))
         self.assertTrue(e.verify(self.game)["verified"])
 
     def test_plan_stops_when_task_complete_also_matches_interrupt(self):
@@ -641,7 +715,7 @@ class BoundedPlanTests(unittest.TestCase):
             ],
             id="radio-plan",
         )
-        order = e.validate_order(raw, state, seed=self.game["seed"])
+        order = e.validate_order(raw, state)
         real_tick = e.tick_world
 
         def tick_with_message(current, dice, current_order, first_tick):
@@ -664,7 +738,10 @@ class BoundedPlanTests(unittest.TestCase):
             [{"index": 1, "label": "later"}],
         )
         self.assertEqual(execution["stop_events"][0]["category"], "message_received")
-        # Without the interrupt watch, the same completion would advance the plan.
+        self.assertEqual(
+            execution["stop_events"][0]["report_ids"],
+            list(dict.fromkeys(execution["stop_events"][0]["report_ids"])),
+        )
         state2 = copy.deepcopy(self.game["state"])
         raw2 = self.plan_order(
             [
@@ -676,7 +753,7 @@ class BoundedPlanTests(unittest.TestCase):
             ],
             id="advance-plan",
         )
-        order2 = e.validate_order(raw2, state2, seed=self.game["seed"])
+        order2 = e.validate_order(raw2, state2)
 
         def tick_with_message_only(current, dice, current_order, first_tick):
             real_tick(current, dice, current_order, first_tick)
@@ -696,7 +773,6 @@ class BoundedPlanTests(unittest.TestCase):
 
     def test_visual_new_contact_stop_names_the_contact(self):
         state = copy.deepcopy(self.game["state"])
-        # Put a surface actor close enough for a sure mast look.
         surface = next(
             actor for actor in state["actors"]
             if e.contact_kind(actor) == "surface"

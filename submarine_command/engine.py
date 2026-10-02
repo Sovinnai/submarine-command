@@ -110,17 +110,19 @@ COMMAND_CONTRACT = {
         ),
         "conditions": (
             "Optional when and stop_when conditions may read only published contact "
-            "status and navigation fields, combined with all, any and not. Every step "
-            "command is validated against the envelopes earlier steps would leave, "
-            "before the live world mutates. An unmet when with else stop, an interrupt "
-            "(including a task-completion category named in interrupt_on), or an "
-            "ambiguous public value returns control."
+            "status and navigation fields, combined with all, any and not. Every "
+            "reachable when/else path validates step commands against deterministic "
+            "equipment, antenna and inventory projection only—never random draws or "
+            "hidden tracks. An unmet when with else stop, an interrupt (including a "
+            "task-completion category named in interrupt_on), or an ambiguous public "
+            "value returns control."
         ),
         "receipt": (
             "The execution receipt names executed steps, remaining steps, elapsed and "
             "unused minutes, and the plan stop reason. Each step keeps a stable action "
-            "id derived from the plan id. A partially executed plan is one atomic order: "
-            "retrying the same id returns the same receipt without further mutation."
+            "id in the reserved # namespace. A partially executed plan is one atomic "
+            "order: retrying the same id returns the same receipt without further "
+            "mutation."
         ),
     },
 }
@@ -2026,7 +2028,70 @@ def _patrol_allows(state, rule):
     return bool(authorization["countermeasures"])
 
 
-def validate_order(raw, state, seed=None):
+def project_plan_step_envelopes(state, command):
+    """Apply only deterministic envelope effects for plan-path validation.
+
+    Updates ordered settings, towed/antenna deployment progress and inventory.
+    Does not move platforms, create tracks, write reports or draw randomness.
+    """
+    ordered = {field: float(command[field]) for field in ("course", "speed", "depth")}
+    ordered["operating_mode"] = command["operating_mode"]
+    state["ordered"] = ordered
+    activity = command["activity"]
+    minutes = command["minutes"]
+    speed = float(command["speed"])
+    if activity == "stream_array" and state.get("towed") is not None:
+        spec = arrays.TOWED
+        record = state["towed"]
+        if (
+            speed <= spec.deploy_speed_knots
+            and record["deployment"] in (arrays.STOWED, arrays.STREAMING)
+        ):
+            progress = record["progress_minutes"] + minutes
+            if progress >= spec.deployment_minutes:
+                _set_towed(state, arrays.STREAMED, 0)
+            else:
+                _set_towed(state, arrays.STREAMING, progress)
+    elif activity == "recover_array" and state.get("towed") is not None:
+        spec = arrays.TOWED
+        record = state["towed"]
+        if (
+            speed <= spec.deploy_speed_knots
+            and record["deployment"] in (arrays.STREAMED, arrays.RECOVERING)
+        ):
+            progress = record["progress_minutes"] + minutes
+            if progress >= spec.retrieval_minutes:
+                _set_towed(state, arrays.STOWED, 0, unstable_until=0)
+            else:
+                _set_towed(state, arrays.RECOVERING, progress)
+    elif activity in ("receive", "transmit", "retrieve"):
+        mode = entity_spec(state["own"]).link_mode(command["link"])
+        if mode.persists_deployed and mode.allows(command["depth"], command["speed"]):
+            record = state["antennas"][mode.antenna]
+            if activity == "retrieve" and record["deployment"] != "stowed":
+                progress = record["progress_minutes"] + minutes
+                if record["deployment"] != "retrieving":
+                    progress = minutes
+                if progress >= mode.retrieval_minutes:
+                    _set_antenna(state, mode.antenna, "stowed", 0)
+                else:
+                    _set_antenna(state, mode.antenna, "retrieving", progress)
+            elif activity == "receive" and record["deployment"] in ("stowed", "deploying"):
+                progress = record["progress_minutes"] + minutes
+                if progress >= mode.deployment_minutes:
+                    _set_antenna(state, mode.antenna, "streamed", 0)
+                else:
+                    _set_antenna(state, mode.antenna, "deploying", progress)
+    elif activity == "employ" and command.get("confirm") is True:
+        weapon = command["weapon"]
+        remaining = state["own"]["inventory"].get(weapon, 0)
+        if remaining > 0:
+            rule = entity_spec(state["own"]).employment(weapon)
+            if rule.allows(command["depth"], command["speed"]):
+                state["own"]["inventory"][weapon] = remaining - 1
+
+
+def validate_order(raw, state, seed=None, *, allow_plan_step_id=False):
     allowed = {
         "id", "minutes", "course", "speed", "depth", "operating_mode", "activity",
         "focus", "link", "assessment", "message", "basis", "weapon", "target",
@@ -2036,6 +2101,11 @@ def validate_order(raw, state, seed=None):
         raise ValueError("Order must be an object using only the documented fields.")
     if not isinstance(raw.get("id"), str) or not 1 <= len(raw["id"]) <= 80:
         raise ValueError("A unique order id of 1 to 80 characters is required.")
+    if raw["id"].startswith(orders.PLAN_STEP_ID_PREFIX) and not allow_plan_step_id:
+        raise ValueError(
+            f"Order ids starting with {orders.PLAN_STEP_ID_PREFIX!r} are reserved "
+            "for plan step actions. No time has elapsed."
+        )
     order = copy.deepcopy(raw)
     # No field is defaulted. An unstated setting is a rejected order, never an
     # assumed one: the engine must not choose a depth, speed, course, plant
@@ -2046,27 +2116,20 @@ def validate_order(raw, state, seed=None):
                 "A plan order takes only id, expected_turn and plan. Each step "
                 "states its own command. No time has elapsed."
             )
-        if seed is None:
-            raise ValueError(
-                "A plan requires the session seed so later steps can be checked "
-                "against the envelopes earlier steps would leave. No time has elapsed."
-            )
         navigation_keys = set(navigation_public(state))
 
-        def advance_state(projected, command):
-            # Optimistic sequencing: ignore interrupts and stop_when so each
-            # later step is checked against a completed prior step.
-            advance = copy.deepcopy(command)
-            advance["interrupt_on"] = []
-            _simulate_window(projected, seed, advance, stop_when=None)
+        def validate_step_command(step_raw, step_state):
+            return validate_order(
+                step_raw, step_state, allow_plan_step_id=True
+            )
 
         order["plan"] = orders.validate_plan(
             order["plan"],
             state,
-            validate_order,
+            validate_step_command,
             navigation_keys,
             plan_id=order["id"],
-            advance_state=advance_state,
+            project_envelopes=project_plan_step_envelopes,
         )
         return order
     require(order, "activity")
@@ -2260,7 +2323,9 @@ def _simulate_window(state, seed, order, stop_when=None):
         if state["ended"]:
             stop = "exercise_end"
             ending = [entry for entry in new_reports if entry["category"] == "exercise_end"]
-            stop_events = orders.execution_events_from_reports(ending + matched_reports)
+            stop_events = orders.execution_events_from_reports(
+                _unique_reports(ending + matched_reports)
+            )
             interrupt_matched = bool(matched_reports)
             break
         completed = [
@@ -2273,7 +2338,9 @@ def _simulate_window(state, seed, order, stop_when=None):
         ]
         if completed:
             stop = "task_complete"
-            stop_events = orders.execution_events_from_reports(completed + matched_reports)
+            stop_events = orders.execution_events_from_reports(
+                _unique_reports(completed + matched_reports)
+            )
             interrupt_matched = bool(matched_reports)
             break
         if matched_reports:
@@ -2384,10 +2451,46 @@ def _simulate_plan(state, seed, order):
     }
 
 
+def _unique_reports(reports):
+    """Preserve order while dropping duplicate report objects by id."""
+    seen = set()
+    unique = []
+    for entry in reports:
+        report_id = entry["id"]
+        if report_id in seen:
+            continue
+        seen.add(report_id)
+        unique.append(entry)
+    return unique
+
+
 def _execution_events(reports, categories):
     """Summarize public reasons for stopping at an integration boundary."""
     selected = [entry for entry in reports if entry["category"] in categories]
-    return orders.execution_events_from_reports(selected)
+    return orders.execution_events_from_reports(_unique_reports(selected))
+
+
+def _employment_orders_from_events(game):
+    """Yield employ commands from top-level orders and executed plan steps."""
+    for event in game["events"]:
+        order = event["order"]
+        if order.get("activity") == "employ":
+            yield order
+            continue
+        plan = order.get("plan")
+        if not plan:
+            continue
+        executed = {
+            step["index"]
+            for step in event.get("execution", {}).get("plan", {}).get("executed_steps", [])
+            if step.get("stop_reason") != "condition_skipped"
+        }
+        for index, step in enumerate(plan["steps"]):
+            if index not in executed:
+                continue
+            command = step.get("command") or {}
+            if command.get("activity") == "employ":
+                yield command
 
 
 def published_scenario_ids():
@@ -2830,10 +2933,7 @@ def _adjudication(game):
     quality = []
     evidence = []
     engagements = game["state"]["engagements"]
-    for event in game["events"]:
-        order = event["order"]
-        if order.get("activity") != "employ":
-            continue
+    for order in _employment_orders_from_events(game):
         match = next(
             (item for item in engagements if item.get("order_id") == order["id"]),
             None,

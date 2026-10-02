@@ -263,27 +263,30 @@ def evaluate_condition(condition, state, navigation):
     raise ConditionAmbiguous("Unsupported condition form.")
 
 
+PLAN_STEP_ID_PREFIX = "#"
+
+
 def plan_step_action_id(plan_id, index):
-    """Stable per-step action id for employment and receipts."""
-    step_id = f"{plan_id}:step-{index}"
+    """Stable per-step action id in a namespace top-level orders cannot use."""
+    step_id = f"{PLAN_STEP_ID_PREFIX}{plan_id}:{index}"
     if len(step_id) > 80:
         raise ValueError(
             "Plan id is too long to derive per-step action ids "
-            f"(need room for ':step-{index}'). No time has elapsed."
+            f"(need room for '{PLAN_STEP_ID_PREFIX}:' and the step index). "
+            "No time has elapsed."
         )
     return step_id
 
 
 def validate_plan(
-    raw_plan, state, validate_command, navigation_keys, plan_id, advance_state
+    raw_plan, state, validate_command, navigation_keys, plan_id, project_envelopes
 ):
-    """Validate every step, projecting envelope state after each prior step.
+    """Validate every reachable step against deterministic envelope projection.
 
-    Conditions are checked against the opening public facts. Each command is
-    validated against the projected world after earlier steps run to completion
-    without interrupts, so stream-then-recover is accepted and stream-then-
-    overspeed is rejected before mutation. advance_state mutates only the
-    disposable projected copy.
+    Conditions are checked against the opening public facts. Command envelopes
+    are checked on every reachable when/else path using only deterministic
+    equipment, antenna and inventory effects—never random draws, tracks or
+    reports—so validation cannot reveal hidden detections.
     """
     if not isinstance(raw_plan, dict) or set(raw_plan) != {"steps"}:
         raise ValueError("A plan takes only a steps list.")
@@ -292,38 +295,73 @@ def validate_plan(
         raise ValueError("A plan requires a non-empty steps list.")
     if len(steps) > MAX_PLAN_STEPS:
         raise ValueError(f"A plan is limited to {MAX_PLAN_STEPS} steps.")
-    projected = copy.deepcopy(state)
-    normalized_steps = []
+    prelim = []
     total_minutes = 0
     for index, raw_step in enumerate(steps):
-        step = _validate_plan_step(
-            raw_step,
-            projected,
-            validate_command,
-            navigation_keys,
-            index,
-            plan_id,
-            condition_state=state,
-        )
-        total_minutes += step["command"]["minutes"]
-        normalized_steps.append(step)
-        advance_state(projected, step["command"])
+        meta, command_raw = _parse_plan_step(raw_step, state, navigation_keys, index)
+        minutes = command_raw.get("minutes")
+        if type(minutes) is not int:
+            raise ValueError(f"Plan step {index} command requires minutes.")
+        total_minutes += minutes
+        prelim.append((meta, command_raw))
     if total_minutes > MAX_PLAN_MINUTES:
         raise ValueError(
             f"A plan's requested minutes may not exceed {MAX_PLAN_MINUTES}."
         )
+
+    stored_commands = [None] * len(prelim)
+
+    def bind_command(index, command_raw, projected):
+        synthetic = {
+            **command_raw,
+            "id": plan_step_action_id(plan_id, index),
+            "expected_turn": 0,
+        }
+        validated = validate_command(synthetic, projected)
+        command = {
+            key: value for key, value in validated.items() if key != "expected_turn"
+        }
+        if stored_commands[index] is None:
+            stored_commands[index] = command
+        return command
+
+    def explore(index, projected):
+        if index >= len(prelim):
+            return
+        meta, command_raw = prelim[index]
+        else_action = meta.get("else")
+        if "when" in meta and else_action == "skip":
+            explore(index + 1, copy.deepcopy(projected))
+            command = bind_command(index, command_raw, projected)
+            ran = copy.deepcopy(projected)
+            project_envelopes(ran, command)
+            explore(index + 1, ran)
+            return
+        if "when" in meta and else_action == "stop":
+            command = bind_command(index, command_raw, projected)
+            ran = copy.deepcopy(projected)
+            project_envelopes(ran, command)
+            explore(index + 1, ran)
+            return
+        command = bind_command(index, command_raw, projected)
+        project_envelopes(projected, command)
+        explore(index + 1, projected)
+
+    explore(0, copy.deepcopy(state))
+
+    normalized_steps = []
+    for index, (meta, _command_raw) in enumerate(prelim):
+        if stored_commands[index] is None:
+            raise ValueError(
+                f"Plan step {index} has no reachable execution path to validate."
+            )
+        step = dict(meta)
+        step["command"] = stored_commands[index]
+        normalized_steps.append(step)
     return {"steps": normalized_steps}
 
 
-def _validate_plan_step(
-    raw_step,
-    state,
-    validate_command,
-    navigation_keys,
-    index,
-    plan_id,
-    condition_state=None,
-):
+def _parse_plan_step(raw_step, condition_state, navigation_keys, index):
     if not isinstance(raw_step, dict):
         raise ValueError(f"Plan step {index} must be an object.")
     allowed = {"label", "when", "else", "command", "stop_when"}
@@ -334,15 +372,14 @@ def _validate_plan_step(
         )
     if "command" not in raw_step:
         raise ValueError(f"Plan step {index} requires command.")
-    condition_state = state if condition_state is None else condition_state
-    step = {}
+    meta = {}
     if "label" in raw_step:
         label = raw_step["label"]
         if not isinstance(label, str) or not 1 <= len(label) <= 40:
             raise ValueError(f"Plan step {index} label must be 1 to 40 characters.")
-        step["label"] = label
+        meta["label"] = label
     if "when" in raw_step:
-        step["when"] = validate_condition(
+        meta["when"] = validate_condition(
             raw_step["when"], condition_state, navigation_keys
         )
         else_action = raw_step.get("else", "stop")
@@ -350,11 +387,11 @@ def _validate_plan_step(
             raise ValueError(
                 f"Plan step {index} else must be stop or skip when when is stated."
             )
-        step["else"] = else_action
+        meta["else"] = else_action
     elif "else" in raw_step:
         raise ValueError(f"Plan step {index} else requires a when condition.")
     if "stop_when" in raw_step:
-        step["stop_when"] = validate_condition(
+        meta["stop_when"] = validate_condition(
             raw_step["stop_when"], condition_state, navigation_keys
         )
     command_raw = copy.deepcopy(raw_step["command"])
@@ -369,16 +406,7 @@ def _validate_plan_step(
             f"Plan step {index} cannot use activity end; end the exercise with a "
             "separate end order."
         )
-    # Keep a stable per-step action id through employment and receipts.
-    synthetic = {
-        **command_raw,
-        "id": plan_step_action_id(plan_id, index),
-        "expected_turn": 0,
-    }
-    validated = validate_command(synthetic, state)
-    command = {key: value for key, value in validated.items() if key != "expected_turn"}
-    step["command"] = command
-    return step
+    return meta, command_raw
 
 
 def remaining_plan_steps(steps_from_index):
