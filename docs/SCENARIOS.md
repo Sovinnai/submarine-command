@@ -46,8 +46,8 @@ The assigned result is an acoustic detection of the submerged boat at or before
 the minute it crosses the published segment. A passage of the meridian outside
 y=-18 to y=+18 is not that crossing. A surface ship crossing the line does not
 finish the watch. A detection made only after the crossing, a mast sighting,
-and a transmitted presence assessment are not that result. Kestrel may cross to
-the east side; the debrief records that it left the assigned side. Weapons
+and a transmitted presence assessment are not that result. Crossing to the
+east side leaves the assigned side; the debrief records it. Weapons
 employment is not authorized.
 
 The chart uses one water depth and one sound-speed profile on both sides of
@@ -105,7 +105,7 @@ The exercise round is not loaded. The attack is an `employ` order for
 `confirm`. That round uses the same published homing run as the exercise
 heavyweight. A transmitted assessment does not launch a weapon. Glass Strait
 and Miller Line load the exercise round and leave offensive employment
-unauthorized; a confirmed launch there is still possible and is recorded as
+unauthorized; a confirmed launch there still executes and is recorded as
 outside the patrol orders.
 
 ### Hidden layout
