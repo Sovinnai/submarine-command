@@ -233,7 +233,7 @@ class CinderRoadTests(unittest.TestCase):
         self.assertIn("wartime heavyweight", public["mission"]["task"])
         self.assertIn("Screening ahead of the column is unknown", public["mission"]["intel"])
         self.assertNotIn("may be screening", public["mission"]["intel"])
-        self.assertNotIn("engage", json.dumps(public["mission"]))
+        self.assertNotIn("engage", json.dumps(public["mission"]).casefold())
         self.assertTrue(public["own_ship"]["authorization"]["offensive_weapons"])
         self.assertIn("authorized", public["own_ship"]["restrictions"]["exercise"])
         glass = engine.public_view(engine.initialize(f"{0:064x}"))

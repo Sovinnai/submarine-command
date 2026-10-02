@@ -405,7 +405,7 @@ CINDER_MISSION = {
     "intel": (
         "The convoy is eastbound on the lane. The escort's side of the column is unknown. "
         "Screening ahead of the column is unknown. "
-        "Engage doctrine fires from a held detection under the published employment rules."
+        "A held detection draws fire under the published employment rules."
     ),
     "radio": (
         "A plot reminder is scheduled for 1630 and an operations reminder for 1830. "
