@@ -46,6 +46,12 @@ See docs/DESIGN.md for the design contract.
 - Do not add or run CI. In particular, do not add GitHub Actions workflows,
   scheduled jobs, or workflow dispatches. The user explicitly reserves Actions
   minutes for another project. Run necessary verification locally instead.
+- On every push that updates an open pull request, check mergeability against
+  the PR base (fetch the base, `git merge-tree` or an equivalent dry merge, or
+  `gh pr view --json mergeable,mergeStateStatus`). If the branch conflicts,
+  merge or rebase the base, resolve conflicts, re-run tests, and push the fix
+  in the same turn before treating the publish as done. Do not leave a
+  CONFLICTING / DIRTY PR after a push.
 - Open pull requests ready for review. Do not create draft pull requests. If a
   pull request is still a draft, mark it ready for review.
 - Do not schedule recurring check-ins to poll a pull request. This repository

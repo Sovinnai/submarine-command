@@ -195,7 +195,12 @@ The public `command_contract` reports these rules in machine-readable form.
 A transmission requires `assessment` (`submerged_present`,
 `surface_or_biologic`, or `unresolved`), a `message`, and a `basis` list of
 existing report IDs. Like every other field, `basis` must be stated: an empty
-list is the explicit declaration that the assessment cites no report. The named link mode's published depth and speed envelope applies. These are
+list is the explicit declaration that the assessment cites no report. Citing
+reports that share one sonar contact makes a track-specific classification;
+citing only shore or intel reports (which have no contact field), or citing
+none, makes an unattributed area-presence assessment. A basis that mixes two
+different contact tracks is rejected before any state change. The named link
+mode's published depth and speed envelope applies. These are
 in-game messages only. Transmission uses `mast_transmit`.
 
 Retry an uncertain operation using its **identical order JSON and id**. The engine
@@ -206,7 +211,9 @@ current display. Invalid orders leave the saved state untouched.
 To end an exercise early, submit an `end` order carrying only `id`,
 `expected_turn` and `activity`; it has no duration. At the normal ending
 or after that order, `debrief` reveals the seed, truth, action log and replay
-verification. During active play, debrief refuses to reveal anything.
+verification. For corridor assessments it scores presence, track association,
+classification, and accidental correctness separately. During active play,
+debrief refuses to reveal anything.
 
 ## Current implementation
 
