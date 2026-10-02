@@ -110,15 +110,17 @@ COMMAND_CONTRACT = {
         ),
         "conditions": (
             "Optional when and stop_when conditions may read only published contact "
-            "status and navigation fields, combined with all, any and not. Every branch "
-            "is validated before the first state change. An unmet when with else stop, "
-            "an interrupt, or an ambiguous public value returns control."
+            "status and navigation fields, combined with all, any and not. Every step "
+            "command is validated against the envelopes earlier steps would leave, "
+            "before the live world mutates. An unmet when with else stop, an interrupt "
+            "(including a task-completion category named in interrupt_on), or an "
+            "ambiguous public value returns control."
         ),
         "receipt": (
             "The execution receipt names executed steps, remaining steps, elapsed and "
-            "unused minutes, and the plan stop reason. A partially executed plan is one "
-            "atomic order: retrying the same id returns the same receipt without further "
-            "mutation."
+            "unused minutes, and the plan stop reason. Each step keeps a stable action "
+            "id derived from the plan id. A partially executed plan is one atomic order: "
+            "retrying the same id returns the same receipt without further mutation."
         ),
     },
 }
@@ -1289,7 +1291,13 @@ def mast_observations(state, dice):
                      "last": state["t"], "evidence": {}, "observations": [], "visual": None,
                      "receiver_id": None, "receiver_kind": "visual"}
             state["tracks"].append(track)
-            report(state, "Scope", f"New visual contact designated {track['id']}.", "new_contact")
+            report(
+                state,
+                "Scope",
+                f"New visual contact designated {track['id']}.",
+                "new_contact",
+                contact=track["id"],
+            )
         b = round((bearing(state["own"], actor) + dice.between(f"mast-bearing:{actor['id']}:{state['t']}", -2, 2)) % 360) % 360
         track["last"] = state["t"]
         visual = {"time": world_clock(state), "elapsed_minutes": state["t"], "bearing_true": b,
@@ -2018,7 +2026,7 @@ def _patrol_allows(state, rule):
     return bool(authorization["countermeasures"])
 
 
-def validate_order(raw, state):
+def validate_order(raw, state, seed=None):
     allowed = {
         "id", "minutes", "course", "speed", "depth", "operating_mode", "activity",
         "focus", "link", "assessment", "message", "basis", "weapon", "target",
@@ -2038,9 +2046,27 @@ def validate_order(raw, state):
                 "A plan order takes only id, expected_turn and plan. Each step "
                 "states its own command. No time has elapsed."
             )
+        if seed is None:
+            raise ValueError(
+                "A plan requires the session seed so later steps can be checked "
+                "against the envelopes earlier steps would leave. No time has elapsed."
+            )
         navigation_keys = set(navigation_public(state))
+
+        def advance_state(projected, command):
+            # Optimistic sequencing: ignore interrupts and stop_when so each
+            # later step is checked against a completed prior step.
+            advance = copy.deepcopy(command)
+            advance["interrupt_on"] = []
+            _simulate_window(projected, seed, advance, stop_when=None)
+
         order["plan"] = orders.validate_plan(
-            order["plan"], state, validate_order, navigation_keys
+            order["plan"],
+            state,
+            validate_order,
+            navigation_keys,
+            plan_id=order["id"],
+            advance_state=advance_state,
         )
         return order
     require(order, "activity")
@@ -2224,6 +2250,7 @@ def _simulate_window(state, seed, order, stop_when=None):
     state["focus"] = order.get("focus") if order["activity"] == "focus" else None
     stop = "requested_interval_complete"
     stop_events = []
+    interrupt_matched = False
     interrupt_on = order["interrupt_on"]
     for i in range(order["minutes"] // TICK):
         before = len(state["reports"])
@@ -2234,6 +2261,7 @@ def _simulate_window(state, seed, order, stop_when=None):
             stop = "exercise_end"
             ending = [entry for entry in new_reports if entry["category"] == "exercise_end"]
             stop_events = orders.execution_events_from_reports(ending + matched_reports)
+            interrupt_matched = bool(matched_reports)
             break
         completed = [
             entry for entry in new_reports
@@ -2246,10 +2274,12 @@ def _simulate_window(state, seed, order, stop_when=None):
         if completed:
             stop = "task_complete"
             stop_events = orders.execution_events_from_reports(completed + matched_reports)
+            interrupt_matched = bool(matched_reports)
             break
         if matched_reports:
             stop = "interrupt"
             stop_events = orders.execution_events_from_reports(matched_reports)
+            interrupt_matched = True
             break
         if stop_when is not None:
             try:
@@ -2267,6 +2297,7 @@ def _simulate_window(state, seed, order, stop_when=None):
     return {"requested_minutes": requested, "elapsed_minutes": elapsed,
             "unused_minutes": requested - elapsed, "integration_steps": elapsed // TICK,
             "stop_reason": stop, "stop_events": stop_events,
+            "interrupt_matched": interrupt_matched,
             "interrupt_on": copy.deepcopy(interrupt_on),
             "maneuver": maneuver_view(state)}
 
@@ -2324,7 +2355,9 @@ def _simulate_plan(state, seed, order):
             stop = "exercise_end"
             stop_events = result["stop_events"]
             break
-        if result["stop_reason"] == "interrupt":
+        if result["interrupt_matched"] or result["stop_reason"] == "interrupt":
+            # A completion category that is also an explicit interrupt returns
+            # control instead of letting the plan continue.
             stop = "interrupt"
             stop_events = result["stop_events"]
             break
@@ -2332,7 +2365,8 @@ def _simulate_plan(state, seed, order):
             stop = "ambiguous_condition"
             stop_events = result["stop_events"]
             break
-        # task_complete, condition_met and requested_interval_complete advance.
+        # task_complete without a matched interrupt, condition_met, and
+        # requested_interval_complete advance to the next step.
     elapsed = state["t"] - start
     return {
         "requested_minutes": requested,
@@ -2614,7 +2648,7 @@ def apply_order(game, raw):
         )
     if type(raw["expected_turn"]) is not int or raw["expected_turn"] != len(game["events"]):
         raise ValueError("The expected turn is stale; review the current report before giving an order.")
-    order = validate_order(raw, game["state"])
+    order = validate_order(raw, game["state"], seed=game["seed"])
     # All validation precedes mutation. CLI adds an atomic write and file lock.
     execution = simulate(game["state"], game["seed"], order)
     event = {"raw": copy.deepcopy(raw), "order": order, "execution": execution,

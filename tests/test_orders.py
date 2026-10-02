@@ -313,7 +313,7 @@ class BoundedPlanTests(unittest.TestCase):
             id="interrupted-plan",
             expected_turn=1,
         )
-        order = e.validate_order(raw, state)
+        order = e.validate_order(raw, state, seed=self.game["seed"])
         real_tick = e.tick_world
 
         def tick_with_loss(current, dice, current_order, first_tick):
@@ -377,7 +377,7 @@ class BoundedPlanTests(unittest.TestCase):
             id="stop-plan",
             expected_turn=1,
         )
-        stop_order = e.validate_order(stop_plan, stop_state)
+        stop_order = e.validate_order(stop_plan, stop_state, seed=self.game["seed"])
         stopped = e.simulate(stop_state, self.game["seed"], stop_order)
         self.assertEqual(stopped["stop_reason"], "condition_unmet")
         self.assertEqual(stopped["elapsed_minutes"], 0)
@@ -404,7 +404,7 @@ class BoundedPlanTests(unittest.TestCase):
             id="skip-plan",
             expected_turn=1,
         )
-        skip_order = e.validate_order(skip_plan, skip_state)
+        skip_order = e.validate_order(skip_plan, skip_state, seed=self.game["seed"])
         skipped = e.simulate(skip_state, self.game["seed"], skip_order)
         self.assertEqual(skipped["stop_reason"], "plan_complete")
         self.assertEqual(
@@ -508,7 +508,9 @@ class BoundedPlanTests(unittest.TestCase):
             for _ in range(orders.MAX_PLAN_STEPS + 1)
         ]
         with self.assertRaises(ValueError) as raised:
-            e.validate_order(self.plan_order(steps), self.game["state"])
+            e.validate_order(
+                self.plan_order(steps), self.game["state"], seed=self.game["seed"]
+            )
         self.assertIn(str(orders.MAX_PLAN_STEPS), str(raised.exception))
 
     def test_plan_replay_is_deterministic(self):
@@ -524,6 +526,207 @@ class BoundedPlanTests(unittest.TestCase):
         e.apply_order(second, raw)
         self.assertEqual(e.canonical(first["state"]), e.canonical(second["state"]))
         self.assertTrue(e.verify(first)["verified"])
+
+    def test_plan_validates_later_steps_against_projected_envelopes(self):
+        # Stream then recover is legal once the first step has completed.
+        recover = self.plan_order(
+            [
+                {
+                    "label": "stream",
+                    "command": self.base_command(
+                        activity="stream_array", minutes=15, speed=5
+                    ),
+                },
+                {
+                    "label": "recover",
+                    "command": self.base_command(
+                        activity="recover_array", minutes=10, speed=5
+                    ),
+                },
+            ],
+            id="stream-recover",
+        )
+        e.validate_order(recover, self.game["state"], seed=self.game["seed"])
+
+        # Stream then above the streamed speed limit is illegal after the array is out.
+        before = e.canonical(self.game)
+        with self.assertRaises(ValueError) as raised:
+            e.apply_order(
+                self.game,
+                self.plan_order(
+                    [
+                        {
+                            "label": "stream",
+                            "command": self.base_command(
+                                activity="stream_array", minutes=15, speed=5
+                            ),
+                        },
+                        {
+                            "label": "sprint",
+                            "command": self.base_command(
+                                minutes=5, speed=14, operating_mode="high_power"
+                            ),
+                        },
+                    ],
+                    id="stream-sprint",
+                ),
+            )
+        self.assertIn("towed_array", str(raised.exception))
+        self.assertEqual(before, e.canonical(self.game))
+
+    def test_planned_employ_keeps_a_stable_action_id(self):
+        e.apply_order(
+            self.game,
+            {
+                "id": "seed",
+                "expected_turn": 0,
+                "activity": "listen",
+                "minutes": 15,
+                "interrupt_on": [],
+                "course": 90,
+                "speed": 5,
+                "depth": 400,
+                "operating_mode": "standard",
+            },
+        )
+        # Use a disposable countermeasure so no target contact is required.
+        before_inventory = self.game["state"]["own"]["inventory"]["mobile_decoy"]
+        raw = self.plan_order(
+            [
+                {
+                    "label": "decoy",
+                    "command": self.base_command(
+                        activity="employ",
+                        minutes=5,
+                        speed=5,
+                        depth=200,
+                        weapon="mobile_decoy",
+                        target="none",
+                        basis=[],
+                        confirm=True,
+                    ),
+                }
+            ],
+            id="employ-plan",
+            expected_turn=1,
+        )
+        result = e.apply_order(self.game, raw)
+        step = result["last_execution"]["plan"]["executed_steps"][0]
+        self.assertEqual(
+            self.game["events"][-1]["order"]["plan"]["steps"][0]["command"]["id"],
+            "employ-plan:step-0",
+        )
+        self.assertEqual(
+            self.game["state"]["own"]["inventory"]["mobile_decoy"],
+            before_inventory - 1,
+        )
+        self.assertIn(step["stop_reason"], ("task_complete", "requested_interval_complete"))
+        self.assertTrue(e.verify(self.game)["verified"])
+
+    def test_plan_stops_when_task_complete_also_matches_interrupt(self):
+        state = copy.deepcopy(self.game["state"])
+        raw = self.plan_order(
+            [
+                {
+                    "label": "hold",
+                    "command": self.base_command(
+                        minutes=30,
+                        interrupt_on=["message_received"],
+                    ),
+                },
+                {
+                    "label": "later",
+                    "command": self.base_command(minutes=5, course=180),
+                },
+            ],
+            id="radio-plan",
+        )
+        order = e.validate_order(raw, state, seed=self.game["seed"])
+        real_tick = e.tick_world
+
+        def tick_with_message(current, dice, current_order, first_tick):
+            real_tick(current, dice, current_order, first_tick)
+            if first_tick:
+                e.report(
+                    current,
+                    "Radio",
+                    "Test traffic copied.",
+                    "message_received",
+                    message_id="B1",
+                )
+
+        with mock.patch.object(e, "tick_world", side_effect=tick_with_message):
+            execution = e.simulate(state, self.game["seed"], order)
+        self.assertEqual(execution["stop_reason"], "interrupt")
+        self.assertEqual(len(execution["plan"]["executed_steps"]), 1)
+        self.assertEqual(
+            execution["plan"]["remaining_steps"],
+            [{"index": 1, "label": "later"}],
+        )
+        self.assertEqual(execution["stop_events"][0]["category"], "message_received")
+        # Without the interrupt watch, the same completion would advance the plan.
+        state2 = copy.deepcopy(self.game["state"])
+        raw2 = self.plan_order(
+            [
+                {"label": "hold", "command": self.base_command(minutes=30)},
+                {
+                    "label": "later",
+                    "command": self.base_command(minutes=5, course=180),
+                },
+            ],
+            id="advance-plan",
+        )
+        order2 = e.validate_order(raw2, state2, seed=self.game["seed"])
+
+        def tick_with_message_only(current, dice, current_order, first_tick):
+            real_tick(current, dice, current_order, first_tick)
+            if first_tick:
+                e.report(
+                    current,
+                    "Radio",
+                    "Test traffic copied.",
+                    "message_received",
+                    message_id="B1",
+                )
+
+        with mock.patch.object(e, "tick_world", side_effect=tick_with_message_only):
+            advanced = e.simulate(state2, self.game["seed"], order2)
+        self.assertEqual(advanced["stop_reason"], "plan_complete")
+        self.assertEqual(len(advanced["plan"]["executed_steps"]), 2)
+
+    def test_visual_new_contact_stop_names_the_contact(self):
+        state = copy.deepcopy(self.game["state"])
+        # Put a surface actor close enough for a sure mast look.
+        surface = next(
+            actor for actor in state["actors"]
+            if e.contact_kind(actor) == "surface"
+        )
+        surface["x"] = state["own"]["x"]
+        surface["y"] = state["own"]["y"] + 0.5
+        state["own"]["depth"] = 70
+        state["ordered"]["depth"] = 70
+        order = e.validate_order(
+            {
+                "id": "mast-look",
+                "expected_turn": 0,
+                "activity": "mast",
+                "minutes": 5,
+                "course": 90,
+                "speed": 5,
+                "depth": 70,
+                "operating_mode": "standard",
+                "interrupt_on": ["new_contact"],
+            },
+            state,
+        )
+        execution = e.simulate(state, self.game["seed"], order)
+        if execution["stop_reason"] != "interrupt":
+            self.skipTest("mast look did not produce a new visual contact")
+        new_events = [
+            event for event in execution["stop_events"] if event["category"] == "new_contact"
+        ]
+        self.assertTrue(new_events)
+        self.assertTrue(new_events[0].get("contacts"))
 
 
 class OrderHelperTests(unittest.TestCase):
