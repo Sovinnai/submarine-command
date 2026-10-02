@@ -489,15 +489,15 @@ class EngineTests(unittest.TestCase):
 
     def test_mode_noise_waits_until_the_mode_is_achieved(self):
         """Commanded quiet does not quiet the boat while high_power is still in force."""
-        self.game["state"]["own"]["speed"] = 14.0
+        self.game["state"]["own"]["speed"] = 18.0
         self.game["state"]["own"]["operating_mode"] = "high_power"
         self.game["state"]["ordered"]["operating_mode"] = "high_power"
-        self.game["state"]["ordered"]["speed"] = 14.0
+        self.game["state"]["ordered"]["speed"] = 18.0
         before = e.entity_noise(self.game["state"]["own"])
         self.assertAlmostEqual(before, 1.65)
         e.apply_order(self.game, self.order(
             id="quiet-down", speed=5, depth=400, minutes=5, operating_mode="quiet"))
-        # First five minutes: still decelerating and still high_power.
+        # First five minutes: decelerating 18→8, still above quiet's 7-knot cap.
         self.assertEqual(self.game["state"]["own"]["operating_mode"], "high_power")
         self.assertAlmostEqual(e.entity_noise(self.game["state"]["own"]), 1.65)
         self.assertGreater(self.game["state"]["own"]["speed"], 7.0)
