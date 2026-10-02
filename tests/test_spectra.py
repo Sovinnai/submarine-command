@@ -1,4 +1,5 @@
 """Narrowband spectra: persistence, operating rules, measurement and replay."""
+import json
 import math
 import unittest
 
@@ -477,6 +478,64 @@ class AspectTests(unittest.TestCase):
         self.assertNotIn("level_memory", rendered)
         self.assertNotIn("source_level_db", rendered)
         self.assertIn("level_memory", state["tracks"][0])
+        self.assertIsInstance(state["tracks"][0]["level_memory"]["lines"], list)
+        self.assertNotIn("line_id", json.dumps(state["tracks"][0]["level_memory"]))
+
+    def test_level_change_follows_measured_frequency_not_hidden_identity(self):
+        previous = {
+            "report_id": "R1",
+            "lines": [
+                {"measured_hz": 50.0, "quality": "moderate", "excess_db": 12.0},
+                {"measured_hz": 100.0, "quality": "strong", "excess_db": 20.0},
+            ],
+            "bands": {},
+        }
+        measurement = {
+            "detail": {
+                "lines": [
+                    {
+                        "line_id": "family-high:1",
+                        "detected": True,
+                        "measured_hz": 50.2,
+                        "quality": "weak",
+                        "excess_db": 4.0,
+                    },
+                    {
+                        "line_id": "family-low:1",
+                        "detected": True,
+                        "measured_hz": 100.1,
+                        "quality": "strong",
+                        "excess_db": 19.5,
+                    },
+                ],
+                "broadband": [],
+            }
+        }
+        change = spectra.received_level_change(previous, measurement)
+        by_frequency = {line["to_hz"]: line for line in change["lines"]}
+        self.assertEqual(by_frequency[50.2]["from_hz"], 50.0)
+        self.assertEqual(by_frequency[50.2]["quality_from"], "moderate")
+        self.assertAlmostEqual(by_frequency[50.2]["change_db"], -8.0)
+        self.assertEqual(by_frequency[100.1]["from_hz"], 100.0)
+        self.assertAlmostEqual(by_frequency[100.1]["change_db"], -0.5)
+        jumped = {
+            "detail": {
+                "lines": [{
+                    "line_id": "blade_rate:1",
+                    "detected": True,
+                    "measured_hz": 70.0,
+                    "quality": "strong",
+                    "excess_db": 10.0,
+                }],
+                "broadband": [],
+            }
+        }
+        lone = {
+            "report_id": "R1",
+            "lines": [{"measured_hz": 50.0, "quality": "strong", "excess_db": 15.0}],
+            "bands": {},
+        }
+        self.assertIsNone(spectra.received_level_change(lone, jumped))
 
 
 if __name__ == "__main__":

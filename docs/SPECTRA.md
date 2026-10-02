@@ -54,7 +54,10 @@ These rules are exhaustive. Nothing else turns a line on or off.
   emitter class uses this curve, so the shape is not a classification feature.
   A constant-speed course change can therefore change received level and
   quality without moving blade rate. The contact report states that level
-  change in dB and quality. It does not state the aspect angle.
+  change in dB and quality for tones whose measured frequencies stay within
+  the same-line fraction, and for a fixed analysis band heard on both looks.
+  A larger frequency jump is not called the same tone. The report does not
+  state the aspect angle.
 
 Examples of the mode gate: a diesel boat on battery emits the electric-motor
 family and does not emit the snorkel-diesel family; snorkeling does the

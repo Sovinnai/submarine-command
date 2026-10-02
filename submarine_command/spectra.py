@@ -39,6 +39,9 @@ KNOTS_TO_METERS_PER_SECOND = 1852.0 / 3600.0
 
 NARROWBAND_DT_DB = 4.0
 BROADBAND_DT_DB = 8.0
+# Same-tone gate shared with the frequency-change indication. A wider jump is
+# a different measured line, not a level change on the earlier tone.
+SAME_LINE_ASSOCIATION_FRACTION = 0.10
 
 # Fictional processing times inside one five-minute step.
 INTEGRATION_SECONDS = {
@@ -338,7 +341,9 @@ def public_model():
             "rule": (
                 "Source level uses a smooth blend of the bow, beam and stern "
                 "anchors. A contact report may show the received-level change "
-                "between looks. It does not include the aspect angle."
+                "between looks for tones paired within the same-line fraction "
+                "and for a fixed analysis band heard on both looks. It does "
+                "not include the aspect angle."
             ),
         },
         "persistence": (
@@ -348,7 +353,9 @@ def public_model():
         "separation": (
             "A contact report contains measured frequency, uncertainty and "
             "quality, and may show the received-level change since the previous "
-            "look on that track. Emitted frequency, family, offset, source level "
+            "look on that track. Tones are paired from measured frequency within "
+            "the same-line fraction. Analysis bands are the fixed public bands. "
+            "Emitted frequency, family, offset, source level "
             "and the aspect angle remain hidden until the debrief."
         ),
         "opposing_detection": (
@@ -868,16 +875,20 @@ def _publish(detailed_lines, detailed_bands, emitted):
 
 
 def level_memory(measurement, report_id):
-    """Hidden excess for lines and bands heard on this look. Not a public field."""
-    lines = {}
+    """Excess for tones and bands heard on this look. Not a public field.
+
+    Tones are stored by measured frequency. The hidden line id is not kept,
+    so a later level change cannot treat private signature identity as a match.
+    """
+    lines = []
     for line in measurement["detail"]["lines"]:
         if not line["detected"]:
             continue
-        lines[line["line_id"]] = {
+        lines.append({
             "measured_hz": _quantize_hz(line["measured_hz"]),
             "quality": line["quality"],
             "excess_db": line["excess_db"],
-        }
+        })
     bands = {}
     for band in measurement["detail"]["broadband"]:
         if not band["detected"]:
@@ -891,6 +902,36 @@ def level_memory(measurement, report_id):
     return {"report_id": report_id, "lines": lines, "bands": bands}
 
 
+def pair_measured_lines(earlier, later, fraction):
+    """Closest unpaired measured lines whose frequencies differ by at most fraction.
+
+    Both lists are public frequency measurements. Hidden line identity is not read.
+    """
+    pairs = sorted(
+        (
+            (abs(left["measured_hz"] - right["measured_hz"]), left_index, right_index)
+            for left_index, left in enumerate(earlier)
+            for right_index, right in enumerate(later)
+        ),
+        key=lambda item: item[0],
+    )
+    used_left, used_right = set(), set()
+    matched = []
+    for _difference, left_index, right_index in pairs:
+        if left_index in used_left or right_index in used_right:
+            continue
+        left = earlier[left_index]
+        right = later[right_index]
+        if abs(left["measured_hz"] - right["measured_hz"]) > (
+            fraction * min(left["measured_hz"], right["measured_hz"])
+        ):
+            continue
+        used_left.add(left_index)
+        used_right.add(right_index)
+        matched.append((left, right))
+    return matched, len(earlier) - len(used_left), len(later) - len(used_right)
+
+
 def _level_delta(prior, quality, excess_db):
     delta = round(excess_db - prior["excess_db"], 1)
     if delta == 0.0 and quality == prior["quality"]:
@@ -902,25 +943,43 @@ def _level_delta(prior, quality, excess_db):
     }
 
 
+def _detected_level_lines(measurement):
+    """Detected tones as public frequency measurements plus the excess used for the delta."""
+    return [
+        {
+            "measured_hz": _quantize_hz(line["measured_hz"]),
+            "quality": line["quality"],
+            "excess_db": line["excess_db"],
+        }
+        for line in measurement["detail"]["lines"]
+        if line["detected"]
+    ]
+
+
 def received_level_change(previous, measurement):
     """Public received-level deltas against the previous look on this track.
 
+    Tones are paired by measured frequency within the same-line fraction used
+    for frequency comparison. A blade-rate jump past that gate is not reported
+    as the same tone. Analysis bands match on their fixed public edges.
     The result names measured frequencies, quality and the excess change.
     It does not include the aspect angle, line identity or source level.
     """
     if not previous:
         return None
+    matched, _unmatched_earlier, _unmatched_later = pair_measured_lines(
+        previous["lines"],
+        _detected_level_lines(measurement),
+        SAME_LINE_ASSOCIATION_FRACTION,
+    )
     lines = []
-    for line in measurement["detail"]["lines"]:
-        prior = previous["lines"].get(line["line_id"])
-        if not line["detected"] or not prior:
-            continue
-        item = _level_delta(prior, line["quality"], line["excess_db"])
+    for prior, current in matched:
+        item = _level_delta(prior, current["quality"], current["excess_db"])
         if item is None:
             continue
         lines.append({
             "from_hz": prior["measured_hz"],
-            "to_hz": _quantize_hz(line["measured_hz"]),
+            "to_hz": current["measured_hz"],
             **item,
         })
     bands = []
