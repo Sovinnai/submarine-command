@@ -132,8 +132,9 @@ Opposing detection uses the same TL function. Own-ship radiated source level
 follows speed and the achieved operating mode's `relative_noise`, using the
 same 10 log10 mode term opposing emitters already use. At standard plant the
 mode term is 0 dB, so prior balance is unchanged. Own-ship self-noise for
-reception remains speed- and receiver-derived; plant mode does not change that
-listening term.
+reception also includes that mode term, scaled by each receiver's
+`pump_coupling`, so a quieter plant improves listening as well as
+counter-detection.
 
 A 20-minute acoustic window applies one correlated quality draw to every
 contact. Repeated looks inside that window are not independent evidence.

@@ -279,7 +279,19 @@ def frequency_gain_db(spec, frequency_hz):
     return max(spec.frequency_gain_min_db, min(spec.frequency_gain_max_db, gain))
 
 
-def self_noise_adjustment_db(spec, speed_knots, pump_fault=False, unstable=False):
+def plant_mode_noise_db(relative_noise, pump_coupling=1.0):
+    """NL contribution from plant mode, scaled by receiver pump coupling.
+
+    At relative_noise 1.0 the term is 0 dB. Hull takes the full mode term;
+    flank and towed take pump_coupling fractions of it, matching how pump
+    faults already couple into each receiver.
+    """
+    return pump_coupling * 10.0 * math.log10(max(relative_noise, 0.05))
+
+
+def self_noise_adjustment_db(
+    spec, speed_knots, pump_fault=False, unstable=False, relative_noise=1.0
+):
     slope = FLOW_NOISE_COEFFICIENT * spec.flow_scale
     factor = max(
         FLOW_NOISE_FACTOR_FLOOR,
@@ -288,7 +300,11 @@ def self_noise_adjustment_db(spec, speed_knots, pump_fault=False, unstable=False
     extra = spec.pump_coupling * PUMP_FAULT_DB if pump_fault else 0.0
     if unstable:
         extra += UNSTABLE_SELF_NOISE_DB
-    return -10.0 * math.log10(factor) + extra
+    return (
+        -10.0 * math.log10(factor)
+        + extra
+        + plant_mode_noise_db(relative_noise, spec.pump_coupling)
+    )
 
 
 def directivity_db(spec, coverage, extra_di=0.0):
@@ -442,7 +458,9 @@ def public_sonar_capabilities(platform_id):
             "Self-noise rises with speed above quiet_speed_knots as -10 log10 of "
             "max(factor_floor, 1 - (speed - quiet_speed_knots) * flow_coefficient * "
             "flow_scale), plus pump_coupling * pump_fault_db when the pump is "
-            "degraded, plus unstable_extra_db while the towed receiver is unstable."
+            "degraded, plus unstable_extra_db while the towed receiver is unstable, "
+            "plus pump_coupling * 10 log10(relative_noise) from the achieved "
+            "operating mode. At standard plant that mode term is 0 dB."
         ),
         "bearing_bias_model": {
             "combined_degrees": 2,

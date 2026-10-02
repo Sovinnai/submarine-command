@@ -42,8 +42,9 @@ Deliberate simplifications
   frequency response, self-noise family, and a depth that is either keel depth
   or a documented keel offset. Towed-array cable shape is not calculated.
 - Own-ship source level for opposing detection follows speed and the achieved
-  operating mode's relative_noise. Own-ship self-noise for reception remains
-  speed- and receiver-derived; plant mode does not change that listening term.
+  operating mode's relative_noise. Own-ship self-noise for reception also
+  includes that mode term, scaled by each receiver's pump_coupling, so a
+  quieter plant improves listening as well as counter-detection.
 """
 from __future__ import annotations
 
@@ -684,10 +685,14 @@ def ambient_noise_db(frequency_hz, baseline=AMBIENT_NL_AT_1KHZ_DB):
     return baseline + 16.0 * math.log10(1000.0 / max(frequency_hz, 50.0))
 
 
-def self_noise_adjustment_db(speed_knots, pump_fault=False):
+def self_noise_adjustment_db(speed_knots, pump_fault=False, relative_noise=1.0):
     factor = max(0.24, 1.0 - max(0.0, speed_knots - 5.0) * 0.055)
     extra = 0.0 if not pump_fault else 3.5
-    return -10.0 * math.log10(factor) + extra
+    return (
+        -10.0 * math.log10(factor)
+        + extra
+        + arrays.plant_mode_noise_db(relative_noise)
+    )
 
 
 def noise_level_db(
@@ -697,12 +702,19 @@ def noise_level_db(
     baseline=AMBIENT_NL_AT_1KHZ_DB,
     array_spec=None,
     unstable=False,
+    relative_noise=1.0,
 ):
     ambient = ambient_noise_db(frequency_hz, baseline)
     if array_spec is None:
-        return ambient + self_noise_adjustment_db(speed_knots, pump_fault)
+        return ambient + self_noise_adjustment_db(
+            speed_knots, pump_fault, relative_noise=relative_noise
+        )
     return ambient + arrays.self_noise_adjustment_db(
-        array_spec, speed_knots, pump_fault, unstable=unstable
+        array_spec,
+        speed_knots,
+        pump_fault,
+        unstable=unstable,
+        relative_noise=relative_noise,
     )
 
 

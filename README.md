@@ -16,7 +16,8 @@ approximations. Contact reports include measured narrowband frequencies, line
 quality and uncertainty. Own-ship reception uses separate hull, flank and towed
 receivers with baffles and a modeled towed-array deployment state. Own-ship
 radiated noise for opposing detection follows speed and the achieved operating
-mode. Towed-array cable shape is not calculated.
+mode, and own-ship reception self-noise includes that mode term scaled by
+receiver pump coupling. Towed-array cable shape is not calculated.
 Unsupported systems are explicitly identified in the capability report.
 
 ## Run it

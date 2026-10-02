@@ -47,8 +47,9 @@ submarine changes depth with planes: coming shallow quickly also means going
 fast, and therefore being loud. A commanded operating mode takes effect only
 once actual speed and depth satisfy that mode's limits. That achieved mode
 also sets own-ship radiated source level for opposing detection through the
-same relative_noise factor opposing emitters use; own-ship self-noise for
-reception remains a separate speed- and receiver-derived term.
+same relative_noise factor opposing emitters use. Own-ship self-noise for
+reception includes that mode term too, scaled by each receiver's
+pump_coupling, so plant state affects both being heard and hearing.
 
 An activity waits on achieved settings rather than ordered ones. Mast
 observation needs the whole five-minute step inside the mast envelope. Each

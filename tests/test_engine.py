@@ -400,10 +400,11 @@ class EngineTests(unittest.TestCase):
         published = e.capability_report()["entity_model"]["own_ship_operating_mode"]
         self.assertTrue(published["speed_limit_enforced"])
         self.assertTrue(published["radiated_noise_modeled"])
-        self.assertFalse(published["self_noise_modeled"])
+        self.assertTrue(published["self_noise_modeled"])
         contract = e.COMMAND_CONTRACT["concurrency"]["operating_mode"]
         self.assertIn("relative_noise", contract)
         self.assertIn("self-noise for reception", contract)
+        self.assertIn("pump_coupling", contract)
         self.assertNotIn(
             "carries no direct counter-detection benefit",
             contract,
@@ -515,6 +516,39 @@ class EngineTests(unittest.TestCase):
             if entry["category"] == "operating_mode"
         ]
         self.assertEqual(modes, ["operating_mode"])
+
+    def test_mode_changes_own_ship_reception_noise(self):
+        """Quieter plant lowers hull NL more than towed NL at equal speed."""
+        from submarine_command import arrays as array_mod
+
+        speed = 5.0
+        quiet = acoustics.noise_level_db(
+            120.0, speed, array_spec=array_mod.HULL, relative_noise=0.72
+        )
+        loud = acoustics.noise_level_db(
+            120.0, speed, array_spec=array_mod.HULL, relative_noise=1.65
+        )
+        quiet_towed = acoustics.noise_level_db(
+            120.0, speed, array_spec=array_mod.TOWED, relative_noise=0.72
+        )
+        loud_towed = acoustics.noise_level_db(
+            120.0, speed, array_spec=array_mod.TOWED, relative_noise=1.65
+        )
+        self.assertLess(quiet, loud)
+        self.assertLess(loud_towed - quiet_towed, loud - quiet)
+
+        state = copy.deepcopy(self.game["state"])
+        actor = state["actors"][0]
+        state["own"]["speed"] = speed
+        state["own"]["operating_mode"] = "quiet"
+        quiet_excess, _ = e.reception_signal_excess(
+            state, actor, state["own"], array_spec=array_mod.HULL
+        )
+        state["own"]["operating_mode"] = "high_power"
+        loud_excess, _ = e.reception_signal_excess(
+            state, actor, state["own"], array_spec=array_mod.HULL
+        )
+        self.assertGreater(quiet_excess, loud_excess)
 
     def test_mode_noise_replay_is_deterministic(self):
         seed = "ef" * 32
