@@ -114,13 +114,23 @@ for an offensive round or `none` for a countermeasure, and `basis` lists
 existing report ids. `confirm` false is fire control asking for confirmation
 and does not launch. `confirm` true launches, including when the patrol orders
 do not authorize that weapon. A launched round then runs on later steps. An empty `interrupt_on` means no interrupt was
-selected, and an empty `basis` means the assessment cites no report. An `end`
-order takes only `id`, `expected_turn` and `activity`. Mode-specific and
+selected, and an empty `basis` means the assessment cites no report. Contact watches
+`new_contact`, `classification_change` and `contact_lost` accept an explicit scope:
+a bare category string means all contacts and is stored as `scope: "any"` on the
+validated order. `classification_change` and `contact_lost` may also name
+`scope: "contacts"` or `scope: "except"` with existing contact ids, so a
+deliberately dropped contact can leave the interrupt watch without deleting its
+history. An `end`
+order takes only `id`, `expected_turn` and `activity`. A bounded `plan` order
+takes only `id`, `expected_turn` and `plan`: a linear list of at most eight
+validated step commands with optional public-state `when` / `stop_when`
+conditions. Mode-specific and
 platform-wide envelopes are both validated. Orders run for 5–60 minutes in
 five-minute steps, with interruption on the selected events. Every result's
 `last_execution` states the requested, elapsed, and unused minutes; its stop
-reason and public report IDs explain why control returned. The unused portion is
-never resumed automatically.
+reason and public report IDs explain why control returned. Contact-scoped stops
+also name the contact ids. A plan receipt lists executed and remaining steps.
+The unused portion is never resumed automatically.
 
 The engine uses one shared clock. At each step, opposing decisions use the
 start-of-step geometry, then own ship and every opposing platform move across the

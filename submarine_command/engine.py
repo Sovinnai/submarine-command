@@ -16,7 +16,7 @@ import secrets
 import sys
 import tempfile
 
-from . import acoustics, arrays, spectra
+from . import acoustics, arrays, orders, spectra
 from .locking import session_lock
 from .observations import (
     ACOUSTIC_BIAS_DEGREES,
@@ -84,9 +84,59 @@ COMMAND_CONTRACT = {
         "required": ["id", "expected_turn", "activity", "minutes", "course", "speed", "depth", "operating_mode", "interrupt_on"],
         "conditional": {"focus": "focus activity", "link": "receive, transmit, or retrieve activity", "assessment": "transmit activity", "message": "transmit activity", "basis": "transmit or employ activity", "weapon": "employ activity", "target": "employ activity", "confirm": "employ activity"},
         "end_order": ["id", "expected_turn", "activity"],
-        "description": "Every listed field must be stated explicitly. The engine supplies no default for any order field: an omitted field is rejected before any state changes rather than being filled in from current or previous settings. An empty interrupt_on list means no interrupt is selected, and an empty basis list means the assessment cites no report. A transmit basis may name reports from at most one contact track: that makes a track-specific classification. Shore or intel reports have no contact field and stay unassociated with sonar tracks; citing only those, or citing none, makes an unattributed area-presence assessment.",
+        "plan_order": ["id", "expected_turn", "plan"],
+        "description": (
+            "Every listed field must be stated explicitly. The engine supplies no "
+            "default for any order field: an omitted field is rejected before any "
+            "state changes rather than being filled in from current or previous "
+            "settings. An empty interrupt_on list means no interrupt is selected, "
+            "and an empty basis list means the assessment cites no report. A "
+            "transmit basis may name reports from at most one contact track: that "
+            "makes a track-specific classification. Shore or intel reports have no "
+            "contact field and stay unassociated with sonar tracks; citing only "
+            "those, or citing none, makes an unattributed area-presence assessment. "
+            "A plan order takes only id, expected_turn and plan; each step carries "
+            "its own command envelope."
+        ),
     },
-    "interrupts": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category and report id from that boundary; the unused portion is never continued automatically.",
+    "interrupts": {
+        "timing": "Events are evaluated only at five-minute step boundaries. A stop returns actual and unused time plus every matching event category, report id and contact id from that boundary; the unused portion is never continued automatically.",
+        "contact_scope": (
+            "new_contact, classification_change and contact_lost accept an explicit scope. "
+            "Bare category strings normalize to scope any. classification_change and "
+            "contact_lost also accept scope contacts or except with existing contact ids, "
+            "so a deliberately dropped contact can leave the interrupt watch without "
+            "deleting its history. new_contact accepts only scope any."
+        ),
+        "validated_form": (
+            "The validated order stores each watch as an object. Non-contact categories "
+            "are {category}. Contact categories always state scope; contacts lists appear "
+            "only for scope contacts or except."
+        ),
+    },
+    "plans": {
+        "bounds": (
+            f"A plan is a linear list of at most {orders.MAX_PLAN_STEPS} steps whose "
+            f"requested minutes sum to at most {orders.MAX_PLAN_MINUTES}. There are no "
+            "loops, gotos or nested plans."
+        ),
+        "conditions": (
+            "Optional when and stop_when conditions may read only published contact "
+            "status and navigation fields, combined with all, any and not. Every "
+            "reachable when/else path validates step commands against deterministic "
+            "equipment, antenna and inventory projection only—never random draws or "
+            "hidden tracks. An unmet when with else stop, an interrupt (including a "
+            "task-completion category named in interrupt_on), or an ambiguous public "
+            "value returns control."
+        ),
+        "receipt": (
+            "The execution receipt names executed steps, remaining steps, elapsed and "
+            "unused minutes, and the plan stop reason. Each step keeps a stable action "
+            "id in the reserved # namespace. A partially executed plan is one atomic "
+            "order: retrying the same id returns the same receipt without further "
+            "mutation."
+        ),
+    },
 }
 PUBLIC_REPORT_FIELDS = {
     "id", "time", "elapsed_minutes", "department", "category", "text",
@@ -1255,7 +1305,13 @@ def mast_observations(state, dice):
                      "last": state["t"], "evidence": {}, "observations": [], "visual": None,
                      "receiver_id": None, "receiver_kind": "visual"}
             state["tracks"].append(track)
-            report(state, "Scope", f"New visual contact designated {track['id']}.", "new_contact")
+            report(
+                state,
+                "Scope",
+                f"New visual contact designated {track['id']}.",
+                "new_contact",
+                contact=track["id"],
+            )
         b = round((bearing(state["own"], actor) + dice.between(f"mast-bearing:{actor['id']}:{state['t']}", -2, 2)) % 360) % 360
         track["last"] = state["t"]
         visual = {"time": world_clock(state), "elapsed_minutes": state["t"], "bearing_true": b,
@@ -2099,16 +2155,133 @@ def _patrol_allows(state, rule):
     return bool(authorization["countermeasures"])
 
 
-def validate_order(raw, state):
-    allowed = {"id", "minutes", "course", "speed", "depth", "operating_mode", "activity", "focus", "link", "assessment", "message", "basis", "weapon", "target", "confirm", "interrupt_on", "expected_turn"}
+def project_plan_step_envelopes(state, command):
+    """Apply deterministic kinematics and envelope progress for plan validation.
+
+    Uses the same productive-minute integration as live ticks (advance_own), so a
+    stream that starts above deploy speed only credits minutes actually spent
+    inside the envelope. Does not create tracks, write reports or draw
+    randomness.
+    """
+    ordered = {field: float(command[field]) for field in ("course", "speed", "depth")}
+    ordered["operating_mode"] = command["operating_mode"]
+    state["ordered"] = ordered
+    remaining = command["minutes"]
+    while remaining > 0:
+        span = min(TICK, remaining)
+        remaining -= span
+        achieved = advance_own(state, span)
+        settle_operating_mode(state)
+        _project_tick_activity(state, command, achieved)
+
+
+def _project_tick_activity(state, command, achieved):
+    """Credit one projected tick of equipment progress from productive minutes."""
+    activity = command["activity"]
+    if activity in ("stream_array", "recover_array") and state.get("towed") is not None:
+        spec = arrays.TOWED
+        record = state["towed"]
+        inside = achieved["envelopes"].get("towed_array", 0.0)
+        if activity == "stream_array":
+            if record["deployment"] == arrays.STREAMED:
+                return
+            if record["deployment"] == arrays.STOWED:
+                _set_towed(state, arrays.STREAMING, record["progress_minutes"])
+                record = state["towed"]
+            if record["deployment"] == arrays.STREAMING:
+                progress = record["progress_minutes"] + inside
+                if progress >= spec.deployment_minutes:
+                    _set_towed(state, arrays.STREAMED, 0)
+                else:
+                    _set_towed(state, arrays.STREAMING, progress)
+            return
+        if record["deployment"] == arrays.STOWED:
+            return
+        if record["deployment"] == arrays.STREAMED:
+            _set_towed(state, arrays.RECOVERING, 0)
+            record = state["towed"]
+        if record["deployment"] == arrays.RECOVERING:
+            progress = record["progress_minutes"] + inside
+            if progress >= spec.retrieval_minutes:
+                _set_towed(state, arrays.STOWED, 0, unstable_until=0)
+            else:
+                _set_towed(state, arrays.RECOVERING, progress)
+        return
+    if activity in ("receive", "transmit", "retrieve"):
+        mode = entity_spec(state["own"]).link_mode(command["link"])
+        if not mode.persists_deployed:
+            return
+        inside = achieved["envelopes"].get(mode.identifier, 0.0)
+        record = state["antennas"][mode.antenna]
+        if activity == "retrieve" and record["deployment"] != "stowed":
+            if record["deployment"] != "retrieving":
+                progress = inside
+            else:
+                progress = record["progress_minutes"] + inside
+            if progress >= mode.retrieval_minutes:
+                _set_antenna(state, mode.antenna, "stowed", 0)
+            else:
+                _set_antenna(state, mode.antenna, "retrieving", progress)
+            return
+        if activity == "receive" and record["deployment"] in ("stowed", "deploying"):
+            progress = record["progress_minutes"] + inside
+            if progress >= mode.deployment_minutes:
+                _set_antenna(state, mode.antenna, "streamed", 0)
+            else:
+                _set_antenna(state, mode.antenna, "deploying", progress)
+            return
+    if activity == "employ" and command.get("confirm") is True:
+        weapon = command["weapon"]
+        remaining = state["own"]["inventory"].get(weapon, 0)
+        if remaining <= 0:
+            return
+        rule = entity_spec(state["own"]).employment(weapon)
+        inside = achieved["envelopes"].get(f"weapon:{rule.identifier}", 0.0)
+        if inside >= TICK:
+            state["own"]["inventory"][weapon] = remaining - 1
+
+
+def validate_order(raw, state, seed=None, *, allow_plan_step_id=False):
+    allowed = {
+        "id", "minutes", "course", "speed", "depth", "operating_mode", "activity",
+        "focus", "link", "assessment", "message", "basis", "weapon", "target",
+        "confirm", "interrupt_on", "expected_turn", "plan",
+    }
     if not isinstance(raw, dict) or set(raw) - allowed:
         raise ValueError("Order must be an object using only the documented fields.")
     if not isinstance(raw.get("id"), str) or not 1 <= len(raw["id"]) <= 80:
         raise ValueError("A unique order id of 1 to 80 characters is required.")
+    if raw["id"].startswith(orders.PLAN_STEP_ID_PREFIX) and not allow_plan_step_id:
+        raise ValueError(
+            f"Order ids starting with {orders.PLAN_STEP_ID_PREFIX!r} are reserved "
+            "for plan step actions. No time has elapsed."
+        )
     order = copy.deepcopy(raw)
     # No field is defaulted. An unstated setting is a rejected order, never an
     # assumed one: the engine must not choose a depth, speed, course, plant
     # lineup, duration or interrupt policy that the captain did not state.
+    if "plan" in order:
+        if set(raw) - {"id", "expected_turn", "plan"}:
+            raise ValueError(
+                "A plan order takes only id, expected_turn and plan. Each step "
+                "states its own command. No time has elapsed."
+            )
+        navigation_keys = set(navigation_public(state))
+
+        def validate_step_command(step_raw, step_state):
+            return validate_order(
+                step_raw, step_state, allow_plan_step_id=True
+            )
+
+        order["plan"] = orders.validate_plan(
+            order["plan"],
+            state,
+            validate_step_command,
+            navigation_keys,
+            plan_id=order["id"],
+            project_envelopes=project_plan_step_envelopes,
+        )
+        return order
     require(order, "activity")
     activity = order["activity"]
     if activity not in ("listen", "focus", "active", "mast", "receive", "transmit", "retrieve", "repair", "stream_array", "recover_array", "employ", "end"):
@@ -2258,18 +2431,13 @@ def validate_order(raw, state):
             "on a transmit or employ order. No time has elapsed."
         )
     require(order, "interrupt_on")
-    valid_interrupts = {"new_contact", "classification_change", "equipment", "deadline", "contact_lost",
-                        "message_received", "radio_failure", "maneuver_complete", "activity_deferred",
-                        "antenna_deployed", "array_streamed", "array_stowed", "array_unstable",
-                        "operating_mode", "incoming_weapon", "weapon_effect"}
-    if not isinstance(order["interrupt_on"], list) or any(x not in valid_interrupts for x in order["interrupt_on"]):
-        raise ValueError("Unknown interrupt condition.")
+    order["interrupt_on"] = orders.normalize_interrupt_on(order["interrupt_on"], state)
     return order
 
 
 def simulate(state, seed, order):
     state["last_action_report_start"] = len(state["reports"])
-    if order["activity"] == "end":
+    if order.get("activity") == "end":
         state["ended"] = True
         state["end_reason"] = "Captain ended the exercise"
         ending = report(state, "Exercise", "Exercise ended by the captain.", "exercise_end")
@@ -2277,6 +2445,12 @@ def simulate(state, seed, order):
                 "integration_steps": 0, "stop_reason": "exercise_end",
                 "stop_events": [{"category": "exercise_end", "report_ids": [ending["id"]]}],
                 "maneuver": maneuver_view(state)}
+    if "plan" in order:
+        return _simulate_plan(state, seed, order)
+    return _simulate_window(state, seed, order)
+
+
+def _simulate_window(state, seed, order, stop_when=None):
     requested = order["minutes"]
     start = state["t"]
     dice = Dice(seed, state["rng_trace"])
@@ -2289,42 +2463,184 @@ def simulate(state, seed, order):
     state["focus"] = order.get("focus") if order["activity"] == "focus" else None
     stop = "requested_interval_complete"
     stop_events = []
+    interrupt_matched = False
+    interrupt_on = order["interrupt_on"]
     for i in range(order["minutes"] // TICK):
         before = len(state["reports"])
         tick_world(state, dice, order, first_tick=i == 0)
         new_reports = state["reports"][before:]
-        categories = {r["category"] for r in new_reports}
-        matched = categories.intersection(order["interrupt_on"])
+        matched_reports = orders.matching_interrupt_reports(new_reports, interrupt_on)
         if state["ended"]:
             stop = "exercise_end"
-            stop_events = _execution_events(new_reports, {"exercise_end"} | matched)
+            ending = [entry for entry in new_reports if entry["category"] == "exercise_end"]
+            stop_events = orders.execution_events_from_reports(
+                _unique_reports(ending + matched_reports)
+            )
+            interrupt_matched = bool(matched_reports)
             break
-        completed = categories.intersection(
-            {"transmission_complete", "message_received", "radio_empty", "repair_complete",
-             "retrieval_complete", "weapon_resolved", "array_streamed", "array_stowed"}
-        )
+        completed = [
+            entry for entry in new_reports
+            if entry["category"] in {
+                "transmission_complete", "message_received", "radio_empty",
+                "repair_complete", "retrieval_complete", "weapon_resolved",
+                "array_streamed", "array_stowed",
+            }
+        ]
         if completed:
             stop = "task_complete"
-            stop_events = _execution_events(new_reports, completed | matched)
+            stop_events = orders.execution_events_from_reports(
+                _unique_reports(completed + matched_reports)
+            )
+            interrupt_matched = bool(matched_reports)
             break
-        if matched:
+        if matched_reports:
             stop = "interrupt"
-            stop_events = _execution_events(new_reports, matched)
+            stop_events = orders.execution_events_from_reports(matched_reports)
+            interrupt_matched = True
             break
+        if stop_when is not None:
+            try:
+                if orders.evaluate_condition(
+                    stop_when, state, navigation_public(state)
+                ):
+                    stop = "condition_met"
+                    stop_events = []
+                    break
+            except orders.ConditionAmbiguous:
+                stop = "ambiguous_condition"
+                stop_events = []
+                break
     elapsed = state["t"] - start
     return {"requested_minutes": requested, "elapsed_minutes": elapsed,
             "unused_minutes": requested - elapsed, "integration_steps": elapsed // TICK,
             "stop_reason": stop, "stop_events": stop_events,
+            "interrupt_matched": interrupt_matched,
+            "interrupt_on": copy.deepcopy(interrupt_on),
             "maneuver": maneuver_view(state)}
+
+
+def _simulate_plan(state, seed, order):
+    steps = order["plan"]["steps"]
+    requested = sum(step["command"]["minutes"] for step in steps)
+    start = state["t"]
+    executed = []
+    remaining = list(enumerate(steps))
+    stop = "plan_complete"
+    stop_events = []
+    last_maneuver = maneuver_view(state)
+    while remaining:
+        index, step = remaining[0]
+        if "when" in step:
+            try:
+                applies = orders.evaluate_condition(
+                    step["when"], state, navigation_public(state)
+                )
+            except orders.ConditionAmbiguous:
+                stop = "ambiguous_condition"
+                break
+            if not applies:
+                if step.get("else", "stop") == "skip":
+                    executed.append({
+                        "index": index,
+                        **({"label": step["label"]} if "label" in step else {}),
+                        "elapsed_minutes": 0,
+                        "requested_minutes": step["command"]["minutes"],
+                        "unused_minutes": step["command"]["minutes"],
+                        "stop_reason": "condition_skipped",
+                        "stop_events": [],
+                    })
+                    remaining.pop(0)
+                    continue
+                stop = "condition_unmet"
+                break
+        remaining.pop(0)
+        result = _simulate_window(
+            state, seed, step["command"], stop_when=step.get("stop_when")
+        )
+        last_maneuver = result["maneuver"]
+        executed.append({
+            "index": index,
+            **({"label": step["label"]} if "label" in step else {}),
+            "elapsed_minutes": result["elapsed_minutes"],
+            "requested_minutes": result["requested_minutes"],
+            "unused_minutes": result["unused_minutes"],
+            "stop_reason": result["stop_reason"],
+            "stop_events": copy.deepcopy(result["stop_events"]),
+            "interrupt_on": copy.deepcopy(result["interrupt_on"]),
+        })
+        if result["stop_reason"] == "exercise_end":
+            stop = "exercise_end"
+            stop_events = result["stop_events"]
+            break
+        if result["interrupt_matched"] or result["stop_reason"] == "interrupt":
+            # A completion category that is also an explicit interrupt returns
+            # control instead of letting the plan continue.
+            stop = "interrupt"
+            stop_events = result["stop_events"]
+            break
+        if result["stop_reason"] == "ambiguous_condition":
+            stop = "ambiguous_condition"
+            stop_events = result["stop_events"]
+            break
+        # task_complete without a matched interrupt, condition_met, and
+        # requested_interval_complete advance to the next step.
+    elapsed = state["t"] - start
+    return {
+        "requested_minutes": requested,
+        "elapsed_minutes": elapsed,
+        "unused_minutes": requested - elapsed,
+        "integration_steps": elapsed // TICK,
+        "stop_reason": stop,
+        "stop_events": copy.deepcopy(stop_events),
+        "plan": {
+            "executed_steps": executed,
+            "remaining_steps": orders.remaining_plan_steps(remaining),
+            "stop_reason": stop,
+        },
+        "maneuver": last_maneuver,
+    }
+
+
+def _unique_reports(reports):
+    """Preserve order while dropping duplicate report objects by id."""
+    seen = set()
+    unique = []
+    for entry in reports:
+        report_id = entry["id"]
+        if report_id in seen:
+            continue
+        seen.add(report_id)
+        unique.append(entry)
+    return unique
 
 
 def _execution_events(reports, categories):
     """Summarize public reasons for stopping at an integration boundary."""
-    return [
-        {"category": category,
-         "report_ids": [entry["id"] for entry in reports if entry["category"] == category]}
-        for category in sorted(categories)
-    ]
+    selected = [entry for entry in reports if entry["category"] in categories]
+    return orders.execution_events_from_reports(_unique_reports(selected))
+
+
+def _employment_orders_from_events(game):
+    """Yield employ commands from top-level orders and executed plan steps."""
+    for event in game["events"]:
+        order = event["order"]
+        if order.get("activity") == "employ":
+            yield order
+            continue
+        plan = order.get("plan")
+        if not plan:
+            continue
+        executed = {
+            step["index"]
+            for step in event.get("execution", {}).get("plan", {}).get("executed_steps", [])
+            if step.get("stop_reason") != "condition_skipped"
+        }
+        for index, step in enumerate(plan["steps"]):
+            if index not in executed:
+                continue
+            command = step.get("command") or {}
+            if command.get("activity") == "employ":
+                yield command
 
 
 def published_scenario_ids():
@@ -2585,7 +2901,7 @@ def apply_order(game, raw):
         )
     if type(raw["expected_turn"]) is not int or raw["expected_turn"] != len(game["events"]):
         raise ValueError("The expected turn is stale; review the current report before giving an order.")
-    order = validate_order(raw, game["state"])
+    order = validate_order(raw, game["state"], seed=game["seed"])
     # All validation precedes mutation. CLI adds an atomic write and file lock.
     execution = simulate(game["state"], game["seed"], order)
     event = {"raw": copy.deepcopy(raw), "order": order, "execution": execution,
@@ -2759,10 +3075,7 @@ def _adjudication(game):
     quality = []
     evidence = []
     engagements = game["state"]["engagements"]
-    for event in game["events"]:
-        order = event["order"]
-        if order.get("activity") != "employ":
-            continue
+    for order in _employment_orders_from_events(game):
         match = next(
             (item for item in engagements if item.get("order_id") == order["id"]),
             None,

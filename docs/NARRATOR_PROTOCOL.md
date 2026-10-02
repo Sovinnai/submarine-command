@@ -84,7 +84,11 @@ supplies no default, so a missing `activity`, `minutes`, `course`, `speed`,
 `depth`, `operating_mode`, `interrupt_on` or `expected_turn` is rejected before
 state mutation rather than filled in from the current settings. Receive,
 transmit and retrieve also require `link`, naming a published communications
-mode. An `employ` order also names `weapon`, `target`, `basis` and `confirm`. The narrator must therefore read `own_ship` and restate the settings it
+mode. An `employ` order also names `weapon`, `target`, `basis` and `confirm`.
+Contact interrupt categories may be bare strings (`scope` any) or watch objects
+with `scope` `any`, `contacts` or `except`. A `plan` order takes only
+`id`, `expected_turn` and `plan` and carries step commands inside the plan.
+The narrator must therefore read `own_ship` and restate the settings it
 intends to keep. Because a maneuver takes simulated time, `own_ship.maneuver`
 reports the commanded value beside the achieved one: restate the commanded
 value to continue a maneuver in progress, not the achieved value, which would
@@ -98,6 +102,10 @@ mutation.
 
 ```json
 {"v":1,"request_id":"r4","op":"act","session_id":"opaque-token-from-start","params":{"order":{"id":"order-001","expected_turn":0,"activity":"listen","minutes":10,"course":90,"speed":5,"depth":400,"operating_mode":"standard","interrupt_on":["new_contact","equipment"]}}}
+```
+
+```json
+{"v":1,"request_id":"r4b","op":"act","session_id":"opaque-token-from-start","params":{"order":{"id":"order-002","expected_turn":1,"activity":"focus","focus":"S03","minutes":30,"course":180,"speed":5,"depth":400,"operating_mode":"standard","interrupt_on":[{"category":"contact_lost","scope":"contacts","contacts":["S03"]},{"category":"new_contact","scope":"any"}]}}}
 ```
 
 `debrief` requires a session and no parameters. It is rejected while the
