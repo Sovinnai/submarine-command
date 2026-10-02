@@ -1,7 +1,7 @@
 # Scenarios
 
 A scenario is a public brief plus the hidden layout drawn when the session is
-created. The published scenarios use rules version 0.15. The same order
+created. The published scenarios use rules version 0.16. The same order
 validation, movement, acoustic measurement, communications, employment and
 replay rules apply. The capability report lists each public brief, clock and
 own-ship start. Glass Strait also lists its relief station. Miller Line lists
@@ -36,18 +36,18 @@ the brief.
 
 ## Operation Miller Line
 
-A barrier watch, not a presence assessment and not a transit to a station.
+A barrier watch. No relief station.
 Kestrel starts at 0100 at (-10 east, 0 north), course 000, 5 knots, 400 feet.
 The Miller Line is the meridian x=0 from y=-18 to y=+18, ten nautical miles
 to the east. North sector is y>0. South sector is y<0. The watch ends at 0700
-wherever the boat is. Nothing in the brief assigns a relief station.
+wherever the boat is.
 
 The assigned result is an acoustic detection of the submerged boat at or before
 the minute it crosses the published segment. A passage of the meridian outside
 y=-18 to y=+18 is not that crossing. A surface ship crossing the line does not
 finish the watch. A detection made only after the crossing, a mast sighting,
-and a transmitted presence assessment are not that result. Kestrel may cross to
-the east side; the debrief records that it left the assigned side. Weapons
+and a transmitted presence assessment are not that result. Crossing to the
+east side leaves the assigned side; the debrief records it. Weapons
 employment is not authorized.
 
 The chart uses one water depth and one sound-speed profile on both sides of
@@ -75,9 +75,9 @@ latitude.
 
 A 0120 shore plot names the north or south sector. It is right on the
 probability in the scenario module and otherwise names the opposite sector.
-The text does not give a latitude. A 0330 bulletin only restates that the
-watch ends at 0700 and that a surface crossing does not close it. Both are
-dated reports, copied through the published receive modes.
+A 0330 bulletin restates the 0700 end and that a surface crossing does not
+close the watch. Both are dated reports, copied through the published receive
+modes.
 
 ### Decisions the layout supports
 
@@ -103,18 +103,17 @@ Offensive employment is authorized. The tubes carry the wartime heavyweight.
 The exercise round is not loaded. The attack is an `employ` order for
 `wartime_heavyweight`: the round, an existing contact, the cited reports, and
 `confirm`. That round uses the same published homing run as the exercise
-heavyweight. A transmitted assessment does not launch a weapon. Glass Strait
-and Miller Line load the exercise round and leave offensive employment
-unauthorized; a confirmed launch there is still possible and is recorded as
-outside the patrol orders.
+heavyweight. Glass Strait and Miller Line load the exercise round and leave
+offensive employment unauthorized; a confirmed launch there still executes and
+is recorded as outside the patrol orders.
 
 ### Hidden layout
 
 Two merchants hold an eastbound column at 8 knots. The escort keeps the same
 speed abeam of the guide, 5 to 6.5 nautical miles to one side, and fires if
 it holds a detection. A diesel submarine screens ahead of the column on
-battery and fires from its own fix. The shore plot says the lane and that the
-escort side is unknown. It does not give a present position.
+battery and fires from its own fix. The shore plot names the lane and leaves
+the escort side unknown.
 
 ### Decisions the layout supports
 

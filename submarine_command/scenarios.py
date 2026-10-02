@@ -2,7 +2,7 @@
 
 A scenario is the captain's brief plus the hidden layout drawn at
 initialization. Movement, acoustics, communications, employment and order
-validation stay on rules version 0.15. Glass Strait is a corridor assessment
+validation stay on rules version 0.16. Glass Strait is a corridor assessment
 with a relief station. Miller Line is a barrier watch. Cinder Road is a
 wartime convoy attack. Opposing specifications stay out of the public brief.
 """
@@ -20,20 +20,20 @@ GLASS_MISSION = {
     "setting": "Fictional ceasefire verification patrol in the Lydian Passage.",
     "task": "Assess whether submerged traffic is using the patrol corridor and send an evidence-based assessment by 0730.",
     "relief": "Be within 3 nautical miles of station RELIEF (24 east, 0 north) at 0800.",
-    "chart": "Local grid in nautical miles: east is +x, north is +y. Patrol corridor: x=0 to 22, y=-6 to +6. All charted water is deep enough for the game envelope.",
+    "chart": "Local grid in nautical miles: east is +x, north is +y. Patrol corridor: x=0 to 22, y=-6 to +6. All charted water is deep enough for the hull.",
     "orders": "Observe and report. Preserve discretion and meet the relief commitment. No offensive weapons employment is authorized in this patrol.",
-    "intel": "0200 shore estimate: submerged transit is possible; no reliable identification or contact solution. Commercial and survey traffic also use the passage.",
-    "radio": "An intelligence update is scheduled for 0330; a later update for 0510. Messages remain dated reports available for retrieval. A mast receive can copy one once its scheduled time has passed. A buoyant receive adds that mode's published delivery latency.",
+    "intel": "0200 shore estimate: submerged transit in the corridor. Commercial and survey traffic also use the passage.",
+    "radio": "An intelligence update is scheduled for 0330; a later update for 0510. Mast receive can copy a bulletin after its scheduled time. Buoyant receive adds that mode's delivery latency.",
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
 }
 
 MILLER_MISSION = {
     "title": "Operation Miller Line",
     "own_ship": "Kestrel",
-    "setting": "Fictional barrier watch on the Miller Line. This is not a search for an unknown contact and there is no relief station.",
+    "setting": "Fictional barrier watch on the Miller Line. No relief station.",
     "task": (
         "Detect a submerged boat as it crosses the Miller Line. "
-        "A surface ship may cross the same line. That crossing does not end the watch. "
+        "A surface crossing does not end the watch. "
         "The watch ends at 0700 wherever Kestrel is."
     ),
     "chart": (
@@ -44,19 +44,19 @@ MILLER_MISSION = {
     ),
     "orders": (
         "Hold the barrier and observe. No offensive weapons employment is authorized. "
-        "Kestrel may cross to the east of the line; that leaves the assigned side and is recorded. "
+        "Crossing east of the line leaves the assigned side. "
         "There is no station to reach."
     ),
     "intel": (
         "A submerged westbound transit is expected to cross during the watch, in one sector. "
-        "A shore plot delivered by radio may name the sector. The plot can be wrong and is not a track. "
-        "A loud surface ship may cross the other sector first."
+        "A shore plot will name a sector. "
+        "Expect loud surface traffic in the other sector before the submerged crossing."
     ),
     "radio": (
         "A sector plot is scheduled for 0120. An operations reminder is scheduled for 0330. "
-        "A mast receive can copy one once its scheduled time has passed. "
-        "A buoyant receive adds that mode's published delivery latency and then limits depth and speed until retrieval. "
-        "Sending an assessment is not the assigned task. A mast transmission can still be intercepted by a surface combatant inside the published range."
+        "Mast receive can copy a bulletin after its scheduled time. "
+        "Buoyant receive adds that mode's delivery latency and then limits depth and speed until retrieval. "
+        "A mast transmission can be intercepted by a surface combatant within radio range."
     ),
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
     "simplifications": (
@@ -132,7 +132,7 @@ class Scenario:
             clock["assessment_deadline_minutes"] = self.schedule.report_due_minutes
         entry = {
             "id": self.identifier,
-            "rules_version": "0.15",
+            "rules_version": "0.16",
             "offensive_loadout": self.offensive_loadout,
             "mission": dict(self.mission),
             "clock": clock,
@@ -146,8 +146,7 @@ class Scenario:
             },
             "selection": (
                 "Opposing entities are drawn at initialization and remain hidden "
-                "until supported observations identify them. The brief does not "
-                "state which draw this patrol received."
+                "until supported observations identify them."
             ),
         }
         relief = self.schedule.relief
@@ -244,13 +243,13 @@ def _place_glass(state, dice, make_entity):
         "initial:shore-error", [item for item in kinds if item != kind]
     )
     estimate = {
-        "surface": "Coastal watch reports a possible surface vessel in the eastern approach.",
-        "submerged": "Coastal watch reports a possible submerged contact in the eastern approach.",
-        "biologic": "Coastal watch reports biological activity that may account for some acoustic reports.",
+        "surface": "Coastal watch reports a surface vessel in the eastern approach.",
+        "submerged": "Coastal watch reports a submerged contact in the eastern approach.",
+        "biologic": "Coastal watch reports biological activity in the eastern approach.",
     }[shore_type]
     state["bulletins"] = [
-        {"id": "INTEL-0330", "available": 20, "text": "0330 intelligence update: " + estimate + " Source confidence: moderate; exact track unavailable. This is an independent shore report, not confirmed identification."},
-        {"id": "OPS-0510", "available": 120, "text": "0510 operations update: assessment deadline 0730 and relief station time 0800 remain unchanged. Commercial schedules are incomplete; absence from the list does not establish military identity."},
+        {"id": "INTEL-0330", "available": 20, "text": "0330 intelligence update: " + estimate + " Source confidence: moderate."},
+        {"id": "OPS-0510", "available": 120, "text": "0510 operations update: assessment deadline 0730 and relief station time 0800 remain unchanged."},
     ]
 
 
@@ -369,15 +368,14 @@ def _place_miller(state, dice, make_entity):
             "text": (
                 "0120 shore plot: the submerged transit is estimated in the "
                 f"{sector_name} sector of the Miller Line, {side}. "
-                "Confidence moderate. This is not a track and it does not "
-                "give a latitude."
+                "Confidence moderate."
             ),
         },
         {
             "id": "OPS-0330",
             "available": 150,
             "text": (
-                "0330 operations update: the barrier watch still ends at 0700. "
+                "0330 operations update: the barrier watch ends at 0700. "
                 "No relief station is assigned. A surface crossing does not "
                 "close the submerged watch."
             ),
@@ -388,10 +386,7 @@ def _place_miller(state, dice, make_entity):
 CINDER_MISSION = {
     "title": "Operation Cinder Road",
     "own_ship": "Kestrel",
-    "setting": (
-        "Fictional wartime patrol against an eastbound coastal convoy. "
-        "This is not an exercise classification and not a barrier watch."
-    ),
+    "setting": "Fictional wartime patrol against an eastbound coastal convoy.",
     "task": (
         "Attack a merchant in the convoy with the wartime heavyweight "
         "before the guide passes east of x=30. The patrol ends at 2100."
@@ -399,34 +394,31 @@ CINDER_MISSION = {
     "chart": (
         "Local grid in nautical miles: east is +x, north is +y. "
         "The convoy lane is the parallel y=0, course 090. "
-        "One water depth and one sound-speed profile apply across the lane. "
-        "The lane is not a change in bathymetry."
+        "One water depth and one sound-speed profile apply across the lane."
     ),
     "orders": (
-        "Offensive employment is authorized. An employ order still names the "
-        "round, an existing contact, the cited reports, and confirm. "
-        "The launch uses that round's published envelope. "
+        "Offensive employment is authorized. Fire the wartime heavyweight on a merchant "
+        "contact; cite the supporting reports and confirm. "
+        "Stay inside the weapon's depth and speed envelope. "
         "There is no relief station."
     ),
     "intel": (
-        "The convoy is eastbound on the lane. The escort's side of the column is not known. "
-        "A submarine may be screening ahead of the column. "
-        "A ship that holds a detection may fire from that detection. "
-        "A shore plot does not give a present position."
+        "The convoy is eastbound on the lane. The escort's side of the column is unknown. "
+        "Whether a submarine is screening ahead is unknown. "
+        "Enemy ships may fire if Kestrel is counter-detected."
     ),
     "radio": (
         "A plot reminder is scheduled for 1630 and an operations reminder for 1830. "
-        "A mast receive can copy one once its scheduled time has passed. "
-        "A buoyant receive adds that mode's published delivery latency. "
-        "A mast transmission can be intercepted by the escort inside the published range. "
-        "Sending an assessment does not launch a weapon."
+        "Mast receive can copy a bulletin after its scheduled time. "
+        "Buoyant receive adds that mode's delivery latency. "
+        "A mast transmission can be intercepted by the escort within radio range."
     ),
     "units": "Courses and bearings true; speed in knots; depth in feet; distances in nautical miles.",
     "simplifications": (
         "Merchants hold course and speed until a weapon casualty stops them. "
         "The escort holds station unless it fires or a casualty stops it. "
-        "A homing round then runs under the published employment rule. "
-        "A mast sighting inside the published visual range can read a name."
+        "A homing round then runs under the weapon's employment rule. "
+        "A close mast sighting can read a name."
     ),
 }
 
@@ -575,9 +567,8 @@ def _place_cinder(state, dice, make_entity):
             "id": "PLOT-1630",
             "available": 30,
             "text": (
-                "1630 shore plot: the convoy is still estimated eastbound on "
-                "the charted lane. Escort station is not known. This is not a "
-                "present-position report."
+                "1630 shore plot: the convoy is estimated eastbound on "
+                "the charted lane. Escort station unknown."
             ),
         },
         {

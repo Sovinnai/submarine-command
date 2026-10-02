@@ -43,7 +43,7 @@ from .scenarios import (
     require_scenario,
 )
 
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 TICK = 5
 MANEUVER_STEP = 1
 # Glass Strait clock. Scenario state carries the patrol's own schedule.
