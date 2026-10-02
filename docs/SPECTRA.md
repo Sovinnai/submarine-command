@@ -46,14 +46,23 @@ These rules are exhaustive. Nothing else turns a line on or off.
   10 log10 of the mode's published relative noise when the family follows mode
   noise, an optional `exponent * log10(speed / reference speed)` term, harmonic
   rolloff of a fixed dB per step, and the emitter's persistent level bias.
+- Aspect then adds one shared fictional curve. The angle is from the emitter's
+  heading to the listener: 0° bow, 90° beam, 180° stern, with port and
+  starboard equal. Anchors are bow −5 dB, beam 0 dB and stern −2.5 dB, blended
+  with a sine-squared weight between adjacent anchors. Beam is the reference,
+  so a beam presentation matches the level from mode and speed alone. Every
+  emitter class uses this curve, so the shape is not a classification feature.
+  A constant-speed course change can therefore change received level and
+  quality without moving blade rate. The contact report states that level
+  change in dB and quality. It does not state the aspect angle.
 
 Examples of the mode gate: a diesel boat on battery emits the electric-motor
 family and does not emit the snorkel-diesel family; snorkeling does the
 opposite. A quiet surface patrol emits the auxiliary family and does not emit
 the main-engine family. Fishing gear and a biologic moan are mode-gated in the
 same way. Own-ship quiet operation drops the pump line. Opposing forces do not
-receive that own-ship spectrum; their detection remains the speed-based
-broadband model documented in the capability report.
+receive that own-ship spectrum. Their detection uses speed, the achieved
+mode's relative noise, and this same aspect curve.
 
 ## Measurement
 

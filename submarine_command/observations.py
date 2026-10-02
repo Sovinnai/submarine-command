@@ -129,7 +129,8 @@ def frequency_change_model():
     return {
         "modeled": True,
         "hidden_motion_used": False,
-        "aspect_modeled": False,
+        "aspect_modeled": True,
+        "aspect_angle_reported": False,
         "confirmed_maneuver": False,
         "sound_speed_m_s": SOUND_SPEED_MPS,
         "operator_sigma": OPERATOR_SIGMA,
@@ -162,8 +163,10 @@ def frequency_change_model():
             "such as blade rate or machinery, because it exceeds the Doppler bound."
         ),
         "aspect": (
-            "Received level does not depend on bow, beam, or stern aspect. "
-            "Quality is reported with the matched line and is not itself a zig call."
+            "Received level follows one published bow, beam and stern curve "
+            "shared by every emitter. Quality on a matched line can change "
+            "when that level changes. This indication does not read or report "
+            "the aspect angle, and quality alone is not a frequency-change call."
         ),
     }
 
@@ -1403,7 +1406,8 @@ def frequency_change_assessment(observations, elapsed_minutes=None):
     notes = [
         "The indication uses measured frequencies and the recorded own-ship track. "
         "It does not confirm a contact maneuver and it does not solve course or speed.",
-        "Received level does not depend on aspect, so a bow or beam turn is not a level cue here.",
+        "A received-level change can follow aspect, range or noise. "
+        "The aspect angle is not reported, and quality alone is not a frequency-change call.",
     ]
     if operator["indicated"] and not supervisor["indicated"]:
         notes.append(

@@ -117,6 +117,7 @@ class BroadbandShape:
 class SignatureTemplate:
     families: tuple[TonalFamily, ...]
     broadband: tuple[BroadbandShape, ...]
+    aspect: acoustics.AspectCurve = acoustics.SHARED_ASPECT_CURVE
 
 
 def _tones(*families):
@@ -321,19 +322,40 @@ def public_model():
             "A blade-rate fundamental is the family's hertz-per-knot coefficient times speed, and is absent below its minimum speed.",
             "Harmonics are integer multiples of the emitted fundamental.",
             "Source level adds 10 log10 of the mode's relative noise, an optional speed term, harmonic rolloff, and the emitter's persistent level bias.",
+            (
+                "The same fictional aspect curve then adds a bow, beam or stern "
+                "offset from the angle between heading and the line of sight. "
+                "Beam is 0 dB. Port and starboard match. The curve is shared by "
+                "every emitter class."
+            ),
         ],
+        "aspect": {
+            "modeled": True,
+            "angle_reported": False,
+            "bow_db": acoustics.SHARED_ASPECT_CURVE.bow_db,
+            "beam_db": acoustics.SHARED_ASPECT_CURVE.beam_db,
+            "stern_db": acoustics.SHARED_ASPECT_CURVE.stern_db,
+            "rule": (
+                "Source level uses a smooth blend of the bow, beam and stern "
+                "anchors. A contact report may show the received-level change "
+                "between looks. It does not include the aspect angle."
+            ),
+        },
         "persistence": (
             "Initialization draws one fractional frequency offset and one "
             "level bias per emitter. Operating state does not reroll them."
         ),
         "separation": (
             "A contact report contains measured frequency, uncertainty and "
-            "quality. Emitted frequency, family and offset remain hidden "
-            "until the debrief."
+            "quality, and may show the received-level change since the previous "
+            "look on that track. Emitted frequency, family, offset, source level "
+            "and the aspect angle remain hidden until the debrief."
         ),
         "opposing_detection": (
-            "Opposing detection of own ship still uses the speed-based "
-            "broadband source level. It does not consume this narrowband spectrum."
+            "Opposing detection of own ship uses speed, the achieved mode's "
+            "relative noise, and this same aspect curve. It does not consume "
+            "this narrowband spectrum. Active transmission uses the published "
+            "active source level and does not apply aspect."
         ),
         "feature_likelihoods": {
             name: {"surface": weights[0], "submerged": weights[1], "biologic": weights[2]}
@@ -384,11 +406,39 @@ def _level_adjustment(rule, relative_noise, speed, bias_db):
     return adjustment
 
 
+def aspect_curve(entity):
+    """The emitter's aspect curve. Every class currently shares one curve."""
+    return SIGNATURES[get_spec(entity["spec"]).identifier].aspect
+
+
+def presentation_adjustment_db(source, receiver):
+    """Aspect term for this source as heard at the receiver. No random draw."""
+    return acoustics.aspect_adjustment_db(
+        acoustics.aspect_angle_deg(source, receiver),
+        aspect_curve(source),
+    )
+
+
+def _apply_aspect(emitted, adjustment_db):
+    return {
+        **emitted,
+        "lines": [
+            {**line, "source_level_db": line["source_level_db"] + adjustment_db}
+            for line in emitted["lines"]
+        ],
+        "broadband": [
+            {**shape, "band_level_db": shape["band_level_db"] + adjustment_db}
+            for shape in emitted["broadband"]
+        ],
+    }
+
+
 def emitted_components(entity):
     """Hidden spectrum for the entity's current mode and speed.
 
     The result is a pure function of the specification, operating state and
-    the persistent signature. It does not draw a random number.
+    the persistent signature. It does not draw a random number and does not
+    include aspect, which depends on the listener's position.
     """
     spec = get_spec(entity["spec"])
     template = SIGNATURES[spec.identifier]
@@ -660,7 +710,11 @@ def measure_contact(
     Geometry can still change the Doppler center and which of those fixed
     draws are above the detection probability.
     """
-    emitted = emitted_components(source)
+    emitted = _apply_aspect(
+        emitted_components(source),
+        presentation_adjustment_db(source, receiver),
+    )
+    aspect_deg = acoustics.aspect_angle_deg(source, receiver)
     elapsed = state["t"]
     water = state["environment"]["true"]["water_depth_feet"]
     if array_spec is None:
@@ -704,6 +758,7 @@ def measure_contact(
         detailed_lines.append({
             "line_id": line["line_id"],
             "family": line["family"],
+            "source_level_db": line["source_level_db"],
             "emitted_hz": frequency,
             "doppler_hz": doppler,
             "shared_bias_fraction": bias,
@@ -717,6 +772,7 @@ def measure_contact(
     detailed_bands = []
     for low, high in ANALYSIS_BANDS:
         parts = []
+        source_parts = []
         for shape in emitted["broadband"]:
             width, center = _band_overlap(shape["low_hz"], shape["high_hz"], low, high)
             if width <= 0:
@@ -726,6 +782,7 @@ def measure_contact(
             loss = _loss_db(state, source, receiver, center, array)
             if loss is None:
                 continue
+            source_parts.append(source_level)
             parts.append(source_level - loss)
         if not parts:
             continue
@@ -750,11 +807,15 @@ def measure_contact(
         detailed_bands.append({
             "low_hz": low,
             "high_hz": high,
+            "source_level_db": _power_sum_db(source_parts),
             "excess_db": excess,
             "quality": acoustics.reception_strength(excess),
             "detected": detected,
         })
-    return _publish(detailed_lines, detailed_bands, emitted)
+    published = _publish(detailed_lines, detailed_bands, emitted)
+    published["aspect_deg"] = aspect_deg
+    published["aspect_adjustment_db"] = presentation_adjustment_db(source, receiver)
+    return published
 
 
 def _quantize_hz(value):
@@ -804,6 +865,110 @@ def _publish(detailed_lines, detailed_bands, emitted):
             "emitted_line_ids": [line["line_id"] for line in emitted["lines"]],
         },
     }
+
+
+def level_memory(measurement, report_id):
+    """Hidden excess for lines and bands heard on this look. Not a public field."""
+    lines = {}
+    for line in measurement["detail"]["lines"]:
+        if not line["detected"]:
+            continue
+        lines[line["line_id"]] = {
+            "measured_hz": _quantize_hz(line["measured_hz"]),
+            "quality": line["quality"],
+            "excess_db": line["excess_db"],
+        }
+    bands = {}
+    for band in measurement["detail"]["broadband"]:
+        if not band["detected"]:
+            continue
+        bands[f"{band['low_hz']:.0f}-{band['high_hz']:.0f}"] = {
+            "low_hz": band["low_hz"],
+            "high_hz": band["high_hz"],
+            "quality": band["quality"],
+            "excess_db": band["excess_db"],
+        }
+    return {"report_id": report_id, "lines": lines, "bands": bands}
+
+
+def _level_delta(prior, quality, excess_db):
+    delta = round(excess_db - prior["excess_db"], 1)
+    if delta == 0.0 and quality == prior["quality"]:
+        return None
+    return {
+        "quality_from": prior["quality"],
+        "quality_to": quality,
+        "change_db": delta,
+    }
+
+
+def received_level_change(previous, measurement):
+    """Public received-level deltas against the previous look on this track.
+
+    The result names measured frequencies, quality and the excess change.
+    It does not include the aspect angle, line identity or source level.
+    """
+    if not previous:
+        return None
+    lines = []
+    for line in measurement["detail"]["lines"]:
+        prior = previous["lines"].get(line["line_id"])
+        if not line["detected"] or not prior:
+            continue
+        item = _level_delta(prior, line["quality"], line["excess_db"])
+        if item is None:
+            continue
+        lines.append({
+            "from_hz": prior["measured_hz"],
+            "to_hz": _quantize_hz(line["measured_hz"]),
+            **item,
+        })
+    bands = []
+    for band in measurement["detail"]["broadband"]:
+        key = f"{band['low_hz']:.0f}-{band['high_hz']:.0f}"
+        prior = previous["bands"].get(key)
+        if not band["detected"] or not prior:
+            continue
+        item = _level_delta(prior, band["quality"], band["excess_db"])
+        if item is None:
+            continue
+        bands.append({
+            "low_hz": band["low_hz"],
+            "high_hz": band["high_hz"],
+            **item,
+        })
+    if not lines and not bands:
+        return None
+    return {
+        "prior_report_id": previous["report_id"],
+        "lines": lines,
+        "broadband": bands,
+    }
+
+
+def level_change_sentence(change):
+    """Sonar prose for a received-level change. It does not name aspect."""
+    if not change:
+        return ""
+    parts = []
+    for line in change["lines"]:
+        parts.append(_level_phrase(f"the line near {line['to_hz']:.3f} Hz", line))
+    for band in change["broadband"]:
+        parts.append(
+            _level_phrase(
+                f"the {band['low_hz']:.0f}-{band['high_hz']:.0f} Hz band",
+                band,
+            )
+        )
+    return " Received level changed: " + "; ".join(parts) + "."
+
+
+def _level_phrase(label, item):
+    if item["quality_from"] == item["quality_to"]:
+        quality = f"quality remained {item['quality_to']}"
+    else:
+        quality = f"quality {item['quality_from']} to {item['quality_to']}"
+    return f"{label} {item['change_db']:+.1f} dB, {quality}"
 
 
 def harmonic_relations(lines):

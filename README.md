@@ -10,7 +10,7 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.16.** The hidden-state and replay foundation
+**Status: early prototype, version 0.17.** The hidden-state and replay foundation
 works. Acoustic transmission uses a documented sound-speed profile and path
 approximations. Contact reports include measured narrowband frequencies, line
 quality and uncertainty. Own-ship reception uses separate hull, flank and towed
@@ -229,7 +229,7 @@ debrief refuses to reveal anything.
 | Sonar | Hull, flank and towed receivers with baffles, frequency response, self-noise, towed deployment state, focused analysis, active range on the hull receiver, and numeric narrowband frequencies with quality, uncertainty and error-source provenance |
 | Observations | Noisy bearings, timestamped own positions, measured bearing drift, and a separate constant-motion solution family |
 | Classification | Overlapping spectral features tied to measured lines, cited reports, and two priors |
-| Frequency change | Crew indication from successive frequencies after own-ship Doppler is removed; aspect does not change level |
+| Frequency change | Crew indication from successive frequencies after own-ship Doppler is removed. A shared bow, beam and stern curve changes received level; the report shows that change and not the aspect angle |
 | Environment | Hidden sound-speed profile, water depth and bottom; dated onboard estimate; frequency-dependent path approximations |
 | Communications | Separate mast receive, mast transmit and buoyant receive modes; antenna state, latency, retrieval and a shared radio window |
 | Opposition | Each unit keeps its own detections, belief and doctrine. Avoid turns away from its fix. Engage may shoot at that fix. Passage does neither |

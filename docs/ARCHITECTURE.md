@@ -66,18 +66,20 @@ retains shell access under the same account remains policy-only isolation.
   supported, uncertain or outside the model's scope.
 - Representative frequencies remain for path-scope display and for opposing
   detection of own ship. Contact reception uses numeric narrowband spectra.
-- Opposing detection of own ship follows speed and the achieved operating
-  mode's relative_noise for radiated source level. It does not match the
-  narrowband signature tonally. Own-ship self-noise for reception also
-  includes that mode term, scaled by each receiver's pump_coupling.
+- Opposing detection of own ship follows speed, the achieved operating
+  mode's relative_noise, and the shared bow/beam/stern aspect curve. It does
+  not match the narrowband signature tonally. Active transmission does not
+  apply aspect. Own-ship self-noise for reception includes the mode term,
+  scaled by each receiver's pump_coupling, and does not include aspect.
 - Crew assessments cite one shared set of reports. Disagreement is the two
   priors applied to that evidence, including overlapping spectral features.
 - Bearings-only motion estimates use a constant-course grid and retain every
   acceptable solution. Endpoint bearing drift is a separate measurement. The
   estimate does not confirm a target maneuver from noise or own-ship motion.
 - Frequency-change indications compare measured lines after an own-ship Doppler
-  correction. They can be heard at 2 sigma and 3 sigma. Source level does not
-  depend on bow, beam, or stern aspect.
+  correction. They can be heard at 2 sigma and 3 sigma. Source level depends
+  on a shared bow, beam and stern curve. The indication does not report the
+  aspect angle, and quality alone is not a frequency-change call.
 - A short nuclear patrol with no modeled reactor endurance constraint; diesel
   battery and snorkeling tradeoffs use explicit fictional rates. Snorkeling
   changes depth, speed and spectrum at a five-minute boundary. The mast model

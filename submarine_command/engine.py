@@ -43,7 +43,7 @@ from .scenarios import (
     require_scenario,
 )
 
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 TICK = 5
 MANEUVER_STEP = 1
 # Glass Strait clock. Scenario state carries the patrol's own schedule.
@@ -78,7 +78,7 @@ COMMAND_CONTRACT = {
         "repair": "Repair needs 20 productive minutes at no more than the published repair speed. Only the minutes actually spent at or below that speed count, so a step spent decelerating earns partial credit. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
         "employment": "An employ order names one published weapon or countermeasure, a target, a basis of existing report ids, and confirm. The ordered depth and speed must lie inside that item's envelope. The launch needs the whole five-minute step inside the envelope; a step spent reaching it is deferred and expends nothing. confirm false is fire control asking for confirmation: no time passes and nothing is expended. confirm true launches even when the patrol orders do not authorize that employment. One completed launch expends one unit. A homing round then runs on later steps at its published speed, and the command window ends when it is in the water. Countermeasures use target none.",
         "towed_array": "stream_array needs 15 productive minutes at 8 knots or less; recover_array needs 10. Only minutes actually spent at or below that speed count, including a step spent decelerating, and progress is kept across interrupted windows. Hull and flank still listen during those activities. Recovery marks the towed receiver recovering before that step's listening, so the towed array does not keep bearings while it is being recovered. While the array is streaming, streamed or recovering, ordered speed may not exceed the published limit for that state. A turn, or the five minutes after one, marks the towed receiver unstable, including a turn on the step that finishes streaming; the engine does not calculate cable shape or layback.",
-        "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. Own-ship narrowband lines follow the published operating-state spectrum rules, but opposing detection does not use that spectrum for tonal matching. Opposing detection uses own-ship speed, the achieved mode's relative_noise as radiated source level, the shared transmission-loss model, receiver depth and active transmission. Own-ship self-noise for reception also includes that mode term, scaled by each receiver's pump_coupling, so a quieter plant improves listening as well as counter-detection.",
+        "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. Own-ship narrowband lines follow the published operating-state spectrum rules, but opposing detection does not use that spectrum for tonal matching. Opposing detection uses own-ship speed, the achieved mode's relative_noise as radiated source level, the shared bow/beam/stern aspect curve, the shared transmission-loss model, receiver depth and active transmission. Active transmission does not apply aspect. Own-ship self-noise for reception also includes that mode term, scaled by each receiver's pump_coupling, so a quieter plant improves listening as well as counter-detection. Aspect is not applied to self-noise.",
     },
     "order_fields": {
         "required": ["id", "expected_turn", "activity", "minutes", "course", "speed", "depth", "operating_mode", "interrupt_on"],
@@ -540,7 +540,8 @@ def reception_signal_excess(state, source, receiver, mode="passive", extra_di=0.
         frequency,
     )
     excess = acoustics.signal_excess_db(
-        acoustics.source_level_db(contact_kind(source), entity_noise(source)),
+        acoustics.source_level_db(contact_kind(source), entity_noise(source))
+        + spectra.presentation_adjustment_db(source, receiver),
         loss.transmission_loss_db,
         acoustics.noise_level_db(
             frequency,
@@ -679,6 +680,11 @@ def observe_contact(state, actor, dice, mode="passive", array_spec=None):
         "receiver": public_receiver,
         "error_sources": error_sources,
     }
+    level_change = spectra.received_level_change(
+        None if new else track.get("level_memory"), measurement
+    )
+    if level_change:
+        obs["level_change"] = level_change
     if mode == "active" and active_detected and detected:
         delta = distance(own, actor)
         obs["range_estimate_nm"] = round(
@@ -692,12 +698,14 @@ def observe_contact(state, actor, dice, mode="passive", array_spec=None):
         (
             f"{track['id']} ({array_id}): bearing {obs['bearing_true']:03d} true, "
             f"{strength} reception, {array['coverage'].replace('_', ' ')}. {obs['description']}"
+            f"{spectra.level_change_sentence(level_change)}"
         ),
         "new_contact" if new else "contact_update",
         contact=track["id"],
         observation=obs,
     )
     obs["report_id"] = entry["id"]
+    track["level_memory"] = spectra.level_memory(measurement, entry["id"])
     new_assessment = _assessment_decision(assessments(track, t)["supervisor"])
     if not new and new_assessment[1] == "high" and new_assessment != old_assessment:
         report(
@@ -861,6 +869,16 @@ def _log_engagement(state, **fields):
     state.setdefault("engagements", []).append(fields)
 
 
+def opposing_radiated_level_db(own, listener, active=False):
+    """Radiated level an opponent uses. Aspect applies to the passive term only."""
+    level = acoustics.own_ship_source_level_db(
+        own["speed"], entity_noise(own), active=active
+    )
+    if active:
+        return level
+    return level + spectra.presentation_adjustment_db(own, listener)
+
+
 def _acoustic_belief(state, actor, dice, active):
     """Update one opponent's detection record from its own receiver."""
     own, t = state["own"], state["t"]
@@ -875,9 +893,7 @@ def _acoustic_belief(state, actor, dice, active):
         array["depth_feet"],
         frequency,
     )
-    source_level = acoustics.own_ship_source_level_db(
-        own["speed"], entity_noise(own), active=active
-    )
+    source_level = opposing_radiated_level_db(own, actor, active=active)
     noise = acoustics.noise_level_db(
         frequency, actor["speed"], baseline=acoustics.OPPONENT_AMBIENT_NL_AT_1KHZ_DB
     )
@@ -2666,15 +2682,20 @@ def capability_report():
             "speed_limit_enforced": True,
             "radiated_noise_modeled": True,
             "self_noise_modeled": True,
+            "aspect_modeled": True,
+            "aspect_angle_reported": False,
             "description": (
                 "An operating mode caps own-ship speed and selects which of "
                 "own ship's defined narrowband lines are emitted. Opposing "
                 "detection does not match that spectrum tonally. It uses "
                 "own-ship speed, the achieved mode's relative_noise for "
-                "radiated source level, the shared transmission-loss model, "
-                "receiver depth, range and active transmission. Own-ship "
-                "self-noise for reception also includes that mode term, "
-                "scaled by each receiver's pump_coupling."
+                "radiated source level, the shared bow/beam/stern aspect "
+                "curve, the shared transmission-loss model, receiver depth, "
+                "range and active transmission. Active transmission does not "
+                "apply aspect. Own-ship self-noise for reception also includes "
+                "that mode term, scaled by each receiver's pump_coupling. "
+                "Aspect is not applied to self-noise, and no report states "
+                "the aspect angle."
             ),
         },
         "maneuver_transients": {

@@ -27,7 +27,7 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
-In rules version 0.16, a command window is 5–60 minutes in five-minute increments.
+In rules version 0.17, a command window is 5–60 minutes in five-minute increments.
 Five minutes is the resolution at which the world reports and at which every
 random draw is keyed. Events are therefore located at step boundaries. Opposing
 decisions use start-of-step information, then every platform moves over the same
@@ -203,7 +203,12 @@ environmental and receiver calibration bias and the reused per-line processing
 error cancel, which is why that window stays longer than the five-minute step:
 a new draw every step would hide a small shift. A residual inside the gate is
 not called. A residual larger than the published Doppler bound is read as an
-emitted-frequency change. Received level does not depend on bow, beam, or stern aspect.
+emitted-frequency change. Received level follows one shared fictional aspect
+curve: bow −5 dB, beam 0 dB and stern −2.5 dB. A constant-speed course change
+can move quality without a blade-rate shift. The contact report shows that
+received-level change and does not include the aspect angle. Opposing
+detection of own ship uses the same curve on the speed and plant-mode source
+level. Active transmission does not.
 
 ## Opposition, weapons and consequences
 

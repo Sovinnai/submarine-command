@@ -2,7 +2,7 @@
 
 A scenario is the captain's brief plus the hidden layout drawn at
 initialization. Movement, acoustics, communications, employment and order
-validation stay on rules version 0.16. Glass Strait is a corridor assessment
+validation stay on rules version 0.17. Glass Strait is a corridor assessment
 with a relief station. Miller Line is a barrier watch. Cinder Road is a
 wartime convoy attack. Opposing specifications stay out of the public brief.
 """
@@ -132,7 +132,7 @@ class Scenario:
             clock["assessment_deadline_minutes"] = self.schedule.report_due_minutes
         entry = {
             "id": self.identifier,
-            "rules_version": "0.16",
+            "rules_version": "0.17",
             "offensive_loadout": self.offensive_loadout,
             "mission": dict(self.mission),
             "clock": clock,

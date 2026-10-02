@@ -463,6 +463,55 @@ class EngineTests(unittest.TestCase):
             places=5,
         )
 
+    def test_own_ship_aspect_changes_opposing_level_and_stays_off_active(self):
+        published = e.capability_report()["entity_model"]["own_ship_operating_mode"]
+        self.assertTrue(published["aspect_modeled"])
+        self.assertFalse(published["aspect_angle_reported"])
+        contract = e.COMMAND_CONTRACT["concurrency"]["operating_mode"]
+        self.assertIn("aspect curve", contract)
+        self.assertIn("Active transmission does not apply aspect", contract)
+        state = copy.deepcopy(self.game["state"])
+        listener = e.make_entity(
+            DART,
+            id="listener",
+            x=0,
+            y=4,
+            course=180,
+            speed=4,
+            depth=300,
+            aware=False,
+            last_heard=None,
+            evaded=False,
+        )
+        own = state["own"]
+        own.update(x=0.0, y=0.0, course=0.0, speed=5.0, depth=400.0, operating_mode="standard")
+        bow = e.opposing_radiated_level_db(own, listener)
+        own["course"] = 90.0
+        beam = e.opposing_radiated_level_db(own, listener)
+        own["course"] = 270.0
+        other_beam = e.opposing_radiated_level_db(own, listener)
+        own["course"] = 180.0
+        stern = e.opposing_radiated_level_db(own, listener)
+        self.assertAlmostEqual(beam - bow, 5.0)
+        self.assertAlmostEqual(beam, other_beam)
+        self.assertAlmostEqual(beam - stern, 2.5)
+        own["course"] = 90.0
+        self.assertAlmostEqual(e.opposing_radiated_level_db(own, listener), beam)
+        self.assertEqual(
+            e.opposing_radiated_level_db(own, listener, active=True),
+            acoustics.ACTIVE_SOURCE_LEVEL_DB,
+        )
+        own["course"] = 0.0
+        self.assertEqual(
+            e.opposing_radiated_level_db(own, listener, active=True),
+            acoustics.ACTIVE_SOURCE_LEVEL_DB,
+        )
+        own.update(course=0.0, speed=10.0)
+        fast_bow = e.opposing_radiated_level_db(own, listener)
+        own.update(course=90.0, speed=5.0)
+        slow_beam = e.opposing_radiated_level_db(own, listener)
+        self.assertGreater(fast_bow, slow_beam)
+
     def _opponent_excess(self, state, actor):
         own = state["own"]
         frequency = acoustics.representative_frequency_hz("submerged", "passive")

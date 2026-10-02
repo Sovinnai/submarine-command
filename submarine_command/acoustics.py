@@ -41,10 +41,11 @@ Deliberate simplifications
 - Array geometry is published per receiver: coverage in relative bearing,
   frequency response, self-noise family, and a depth that is either keel depth
   or a documented keel offset. Towed-array cable shape is not calculated.
-- Own-ship source level for opposing detection follows speed and the achieved
-  operating mode's relative_noise. Own-ship self-noise for reception also
-  includes that mode term, scaled by each receiver's pump_coupling, so a
-  quieter plant improves listening as well as counter-detection.
+- Own-ship source level for opposing detection follows speed, the achieved
+  operating mode's relative_noise, and the shared bow/beam/stern aspect
+  curve. Own-ship self-noise for reception also includes that mode term,
+  scaled by each receiver's pump_coupling, so a quieter plant improves
+  listening as well as counter-detection. Aspect is not applied to self-noise.
 """
 from __future__ import annotations
 
@@ -651,6 +652,56 @@ def representative_probe_bands():
         {"domain": "active", "frequency_hz": ACTIVE_FREQUENCY_HZ, "mode": "active"}
     )
     return tuple(bands)
+
+
+@dataclass(frozen=True)
+class AspectCurve:
+    """Fictional source-level offsets, dB, at bow, beam and stern.
+
+    Beam is the reference, so a beam presentation matches the source level
+    from speed and operating mode alone. The same curve is assigned to every
+    emitter class; the shape is not a classification feature.
+    """
+
+    bow_db: float
+    beam_db: float
+    stern_db: float
+
+
+# Bow is quieter than a speed doubling on the own-ship 20 log10 curve
+# (about +6 dB from 5 to 10 knots) and larger than the Kestrel plant span
+# (about −1.4 dB quiet to +2.2 dB high_power). Stern sits between them.
+SHARED_ASPECT_CURVE = AspectCurve(bow_db=-5.0, beam_db=0.0, stern_db=-2.5)
+
+
+def aspect_angle_deg(source, receiver):
+    """Angle from the source heading to the receiver: 0 bow, 90 beam, 180 stern.
+
+    Port and starboard share one angle. Coincident positions have no line of
+    sight and return None so the caller adds no aspect term.
+    """
+    east = receiver["x"] - source["x"]
+    north = receiver["y"] - source["y"]
+    if math.hypot(east, north) < 1e-9:
+        return None
+    line_of_sight = math.degrees(math.atan2(east, north)) % 360.0
+    course = float(source["course"]) % 360.0
+    delta = (line_of_sight - course + 180.0) % 360.0 - 180.0
+    return abs(delta)
+
+
+def aspect_adjustment_db(angle_deg, curve=SHARED_ASPECT_CURVE):
+    """Smooth blend of the bow, beam and stern anchors. None adds 0 dB."""
+    if angle_deg is None:
+        return 0.0
+    angle = abs(float(angle_deg)) % 360.0
+    if angle > 180.0:
+        angle = 360.0 - angle
+    if angle <= 90.0:
+        weight = math.sin(math.radians(angle)) ** 2
+        return curve.bow_db + (curve.beam_db - curve.bow_db) * weight
+    weight = math.sin(math.radians(angle - 90.0)) ** 2
+    return curve.beam_db + (curve.stern_db - curve.beam_db) * weight
 
 
 def source_level_db(domain, relative_noise, mode="passive"):

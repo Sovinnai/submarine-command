@@ -476,7 +476,8 @@ class PublicContactTests(unittest.TestCase):
         change = contact["frequency_change"]
         self.assertFalse(change["confirmed_maneuver"])
         self.assertFalse(change["assumptions"]["hidden_motion_used"])
-        self.assertFalse(change["assumptions"]["aspect_modeled"])
+        self.assertTrue(change["assumptions"]["aspect_modeled"])
+        self.assertFalse(change["assumptions"]["aspect_angle_reported"])
         self.assertEqual(change["assumptions"]["correlation_window_minutes"], 20)
         self.assertEqual(change["assumptions"]["operator_sigma"], 2.0)
         self.assertEqual(change["assumptions"]["supervisor_sigma"], 3.0)
@@ -485,7 +486,8 @@ class PublicContactTests(unittest.TestCase):
         _scan(self, change)
         self.assertNotIn("_ratio", json.dumps(change))
         published = view["platform_capabilities"]["frequency_change_model"]
-        self.assertFalse(published["aspect_modeled"])
+        self.assertTrue(published["aspect_modeled"])
+        self.assertFalse(published["aspect_angle_reported"])
         self.assertEqual(published["correlation_window_minutes"], spectra.CORRELATION_WINDOW_MINUTES)
         self.assertEqual(spectra.CORRELATION_WINDOW_MINUTES, 20)
         self.assertIn("frequency_change", view["platform_capabilities"]["measurements"])
