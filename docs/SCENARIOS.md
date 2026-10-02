@@ -1,7 +1,7 @@
 # Scenarios
 
 A scenario is a public brief plus the hidden layout drawn when the session is
-created. The published scenarios use rules version 0.14. The same order
+created. The published scenarios use rules version 0.15. The same order
 validation, movement, acoustic measurement, communications, employment and
 replay rules apply. The capability report lists each public brief, clock and
 own-ship start. Glass Strait also lists its relief station. Miller Line lists
@@ -131,8 +131,12 @@ inferred from what is heard or seen.
 The debrief remains unavailable until the exercise has ended. Glass Strait
 reports whether an assessment was sent by the deadline, whether Kestrel was
 inside the relief radius at 0800, whether a submerged opponent detected
-Kestrel, and any recorded radio intercepts. Miller Line reports whether the
-submerged boat crossed, the crossing minute, whether an acoustic observation
+Kestrel, and any recorded radio intercepts. Each transmitted assessment also
+records whether its scope was an unattributed area-presence claim or a
+track-specific classification, then scores correct presence, correct track
+association, correct classification, and accidental correctness. Shore and
+intel reports stay unassociated with sonar tracks. Miller Line reports whether
+the submerged boat crossed, the crossing minute, whether an acoustic observation
 of that boat exists at or before that minute, whether the only observations
 are later, whether Kestrel went east of the line, and whether the crossing
 boat detected Kestrel. Cinder Road reports merchant casualties, whether the
