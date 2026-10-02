@@ -10,12 +10,13 @@ harmonics, noise, sound transmission, array geometry and target motion. Resoluti
 may be abstracted into turns, bands or tables, but measurements have persistent
 causes and the captain's decisions must change the world consistently.
 
-**Status: early prototype, version 0.15.** The hidden-state and replay foundation
+**Status: early prototype, version 0.16.** The hidden-state and replay foundation
 works. Acoustic transmission uses a documented sound-speed profile and path
 approximations. Contact reports include measured narrowband frequencies, line
 quality and uncertainty. Own-ship reception uses separate hull, flank and towed
-receivers with baffles and a modeled towed-array deployment state. Towed-array
-cable shape is not calculated.
+receivers with baffles and a modeled towed-array deployment state. Own-ship
+radiated noise for opposing detection follows speed and the achieved operating
+mode. Towed-array cable shape is not calculated.
 Unsupported systems are explicitly identified in the capability report.
 
 ## Run it

@@ -128,8 +128,12 @@ and flank share own-ship-mounted self-noise. The towed array does not. A track
 is one receiver's history; detections on another receiver are not automatically
 the same contact. A visual sighting is its own history.
 
-Opposing detection uses the same TL function. Own-ship source level still
-follows speed rather than operating mode.
+Opposing detection uses the same TL function. Own-ship radiated source level
+follows speed and the achieved operating mode's `relative_noise`, using the
+same 10 log10 mode term opposing emitters already use. At standard plant the
+mode term is 0 dB, so prior balance is unchanged. Own-ship self-noise for
+reception remains speed- and receiver-derived; plant mode does not change that
+listening term.
 
 A 20-minute acoustic window applies one correlated quality draw to every
 contact. Repeated looks inside that window are not independent evidence.

@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -395,12 +396,143 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(execution["stop_reason"], "interrupt")
             self.assertLess(execution["elapsed_minutes"], 60)
 
-    def test_own_ship_operating_mode_noise_is_declared_unmodeled(self):
+    def test_own_ship_operating_mode_radiated_noise_is_modeled(self):
         published = e.capability_report()["entity_model"]["own_ship_operating_mode"]
         self.assertTrue(published["speed_limit_enforced"])
-        self.assertFalse(published["radiated_noise_modeled"])
+        self.assertTrue(published["radiated_noise_modeled"])
+        self.assertFalse(published["self_noise_modeled"])
         contract = e.COMMAND_CONTRACT["concurrency"]["operating_mode"]
-        self.assertIn("opposing detection does not use that spectrum", contract)
+        self.assertIn("relative_noise", contract)
+        self.assertIn("self-noise for reception", contract)
+        self.assertNotIn(
+            "carries no direct counter-detection benefit",
+            contract,
+        )
+
+    def test_mode_changes_counter_detection_at_equal_speed(self):
+        """Quiet and high_power at the same geometry are not interchangeable."""
+        from submarine_command.platforms import KESTREL
+
+        quiet = KESTREL.mode("quiet").relative_noise
+        loud = KESTREL.mode("high_power").relative_noise
+        standard = KESTREL.mode("standard").relative_noise
+        speed = 5.0
+        quiet_sl = acoustics.own_ship_source_level_db(speed, quiet)
+        loud_sl = acoustics.own_ship_source_level_db(speed, loud)
+        standard_sl = acoustics.own_ship_source_level_db(speed, standard)
+        # Standard preserves the pre-0.16 speed-only baseline.
+        self.assertAlmostEqual(
+            standard_sl,
+            acoustics.own_ship_source_level_db(speed, 1.0),
+        )
+        self.assertAlmostEqual(
+            standard_sl,
+            132.0 + 20.0 * math.log10(speed / 5.0),
+        )
+        self.assertLess(quiet_sl, standard_sl)
+        self.assertGreater(loud_sl, standard_sl)
+        # Speed and mode remain distinct levers.
+        fast_quiet = acoustics.own_ship_source_level_db(7.0, quiet)
+        slow_loud = acoustics.own_ship_source_level_db(3.0, loud)
+        self.assertNotAlmostEqual(fast_quiet, slow_loud)
+
+        state = copy.deepcopy(self.game["state"])
+        actor = e.make_entity(
+            DART,
+            id="listener",
+            x=4,
+            y=0,
+            course=90,
+            speed=4,
+            depth=300,
+            aware=False,
+            last_heard=None,
+            evaded=False,
+        )
+        state["own"]["speed"] = speed
+        state["own"]["depth"] = 400
+        state["own"]["operating_mode"] = "quiet"
+        quiet_excess = self._opponent_excess(state, actor)
+        state["own"]["operating_mode"] = "high_power"
+        loud_excess = self._opponent_excess(state, actor)
+        self.assertLess(quiet_excess, loud_excess)
+        self.assertAlmostEqual(
+            loud_excess - quiet_excess,
+            loud_sl - quiet_sl,
+            places=5,
+        )
+
+    def _opponent_excess(self, state, actor):
+        own = state["own"]
+        frequency = acoustics.representative_frequency_hz("submerged", "passive")
+        array = acoustics.receiving_array(actor)
+        loss = acoustics.transmission_loss(
+            state["environment"]["true"],
+            e.distance(own, actor),
+            own["depth"],
+            array["depth_feet"],
+            frequency,
+        )
+        source_level = acoustics.own_ship_source_level_db(
+            own["speed"], e.entity_noise(own), active=False
+        )
+        noise = acoustics.noise_level_db(
+            frequency, actor["speed"], baseline=acoustics.OPPONENT_AMBIENT_NL_AT_1KHZ_DB
+        )
+        return acoustics.signal_excess_db(
+            source_level,
+            loss.transmission_loss_db,
+            noise,
+            acoustics.OPPONENT_DIRECTIVITY_DB,
+            acoustics.OPPONENT_DT_DB,
+        )
+
+    def test_mode_noise_waits_until_the_mode_is_achieved(self):
+        """Commanded quiet does not quiet the boat while high_power is still in force."""
+        self.game["state"]["own"]["speed"] = 14.0
+        self.game["state"]["own"]["operating_mode"] = "high_power"
+        self.game["state"]["ordered"]["operating_mode"] = "high_power"
+        self.game["state"]["ordered"]["speed"] = 14.0
+        before = e.entity_noise(self.game["state"]["own"])
+        self.assertAlmostEqual(before, 1.65)
+        e.apply_order(self.game, self.order(
+            id="quiet-down", speed=5, depth=400, minutes=5, operating_mode="quiet"))
+        # First five minutes: still decelerating and still high_power.
+        self.assertEqual(self.game["state"]["own"]["operating_mode"], "high_power")
+        self.assertAlmostEqual(e.entity_noise(self.game["state"]["own"]), 1.65)
+        self.assertGreater(self.game["state"]["own"]["speed"], 7.0)
+        # Continue until quiet is actually achieved.
+        turn = 1
+        while self.game["state"]["own"]["operating_mode"] != "quiet" and turn < 8:
+            e.apply_order(self.game, self.order(
+                id=f"quiet-{turn}", expected_turn=turn, speed=5, depth=400,
+                minutes=5, operating_mode="quiet"))
+            turn += 1
+        self.assertEqual(self.game["state"]["own"]["operating_mode"], "quiet")
+        self.assertAlmostEqual(e.entity_noise(self.game["state"]["own"]), 0.72)
+        modes = [
+            entry["category"] for entry in self.game["state"]["reports"]
+            if entry["category"] == "operating_mode"
+        ]
+        self.assertEqual(modes, ["operating_mode"])
+
+    def test_mode_noise_replay_is_deterministic(self):
+        seed = "ef" * 32
+        first = e.initialize(seed)
+        second = e.initialize(seed)
+        actions = [
+            self.order(id="loud", speed=14, depth=400, minutes=10,
+                       operating_mode="high_power"),
+            dict(self.order(id="quiet", expected_turn=1, speed=5, depth=400,
+                            minutes=30, operating_mode="quiet")),
+        ]
+        for action in actions:
+            e.apply_order(first, action)
+            e.apply_order(second, copy.deepcopy(action))
+        self.assertEqual(e.canonical(first), e.canonical(second))
+        e.verify(first)
+        self.assertEqual(first["state"]["own"]["operating_mode"], "quiet")
+        self.assertAlmostEqual(e.entity_noise(first["state"]["own"]), 0.72)
 
     # --- envelope crossings ---
 

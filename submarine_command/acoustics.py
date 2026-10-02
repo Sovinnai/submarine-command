@@ -41,8 +41,9 @@ Deliberate simplifications
 - Array geometry is published per receiver: coverage in relative bearing,
   frequency response, self-noise family, and a depth that is either keel depth
   or a documented keel offset. Towed-array cable shape is not calculated.
-- Own-ship source level for opposing detection follows speed, not operating
-  mode. Mode-derived radiated noise is a separate rules change.
+- Own-ship source level for opposing detection follows speed and the achieved
+  operating mode's relative_noise. Own-ship self-noise for reception remains
+  speed- and receiver-derived; plant mode does not change that listening term.
 """
 from __future__ import annotations
 
@@ -657,11 +658,21 @@ def source_level_db(domain, relative_noise, mode="passive"):
     return DOMAIN_SOURCE_LEVEL_DB[domain] + 10.0 * math.log10(max(relative_noise, 0.05))
 
 
-def own_ship_source_level_db(speed_knots, active=False):
-    """Speed-derived own-ship source level; operating mode is not applied here."""
+def own_ship_source_level_db(speed_knots, relative_noise=1.0, active=False):
+    """Own-ship radiated source level for opposing detection.
+
+    Speed and plant mode stay distinct: the speed term is the previous
+    20 log10(speed/5) curve, and the mode term is the same
+    10 log10(relative_noise) factor opposing emitters already use. At
+    relative_noise 1.0 (standard) the mode term is 0 dB, so prior balance
+    is preserved. Active transmissions keep the published active source
+    level and do not apply relative_noise.
+    """
     if active:
         return ACTIVE_SOURCE_LEVEL_DB
-    return 132.0 + 20.0 * math.log10(max(speed_knots, 1.0) / 5.0)
+    speed_term = 20.0 * math.log10(max(speed_knots, 1.0) / 5.0)
+    mode_term = 10.0 * math.log10(max(relative_noise, 0.05))
+    return 132.0 + speed_term + mode_term
 
 
 def target_strength_db(domain):

@@ -27,7 +27,7 @@ larger command decisions. Five-minute ticks are the current prototype's rule;
 tick size is a modeling choice rather than the essential identity of the game.
 Duration, geometry, operating state and environmental conditions affect outcomes.
 
-In rules version 0.15, a command window is 5–60 minutes in five-minute increments.
+In rules version 0.16, a command window is 5–60 minutes in five-minute increments.
 Five minutes is the resolution at which the world reports and at which every
 random draw is keyed. Events are therefore located at step boundaries. Opposing
 decisions use start-of-step information, then every platform moves over the same
@@ -45,7 +45,10 @@ values transit toward them at published fictional rates, and the two are always
 reported separately. Depth rate is proportional to actual speed, because a
 submarine changes depth with planes: coming shallow quickly also means going
 fast, and therefore being loud. A commanded operating mode takes effect only
-once actual speed and depth satisfy that mode's limits.
+once actual speed and depth satisfy that mode's limits. That achieved mode
+also sets own-ship radiated source level for opposing detection through the
+same relative_noise factor opposing emitters use; own-ship self-noise for
+reception remains a separate speed- and receiver-derived term.
 
 An activity waits on achieved settings rather than ordered ones. Mast
 observation needs the whole five-minute step inside the mast envelope. Each
