@@ -604,13 +604,18 @@ def _range_nm(source, receiver):
 
 
 def _receiver_noise_db(state, receiver, frequency_hz, own_ship, array_spec=None, unstable=False):
-    pump = bool(state.get("pump_fault")) and receiver.get("id") == own_ship.get("id")
+    listening_own = receiver.get("id") == own_ship.get("id")
+    pump = bool(state.get("pump_fault")) and listening_own
+    relative = 1.0
+    if listening_own:
+        relative = get_spec(own_ship["spec"]).mode(own_ship["operating_mode"]).relative_noise
     return acoustics.noise_level_db(
         frequency_hz,
         receiver["speed"],
         pump,
         array_spec=array_spec,
         unstable=unstable,
+        relative_noise=relative,
     )
 
 

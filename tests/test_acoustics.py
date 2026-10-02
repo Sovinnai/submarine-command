@@ -304,6 +304,23 @@ class EnvironmentEstimateTests(unittest.TestCase):
         public = a.public_environment(environment, 0)
         self.assertEqual(public["path_model"][a.PATH_CONVERGENCE_ZONE]["status"], a.OUTSIDE_SCOPE)
 
+    def test_own_ship_source_level_keeps_speed_and_mode_distinct(self):
+        baseline = a.own_ship_source_level_db(5.0, 1.0)
+        self.assertAlmostEqual(baseline, 132.0)
+        quiet = a.own_ship_source_level_db(5.0, 0.72)
+        loud = a.own_ship_source_level_db(5.0, 1.65)
+        self.assertAlmostEqual(quiet - baseline, 10.0 * math.log10(0.72))
+        self.assertAlmostEqual(loud - baseline, 10.0 * math.log10(1.65))
+        # Active ignores relative_noise.
+        self.assertEqual(
+            a.own_ship_source_level_db(5.0, 0.72, active=True),
+            a.ACTIVE_SOURCE_LEVEL_DB,
+        )
+        self.assertEqual(
+            a.own_ship_source_level_db(5.0, 1.65, active=True),
+            a.ACTIVE_SOURCE_LEVEL_DB,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

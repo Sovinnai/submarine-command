@@ -78,7 +78,7 @@ COMMAND_CONTRACT = {
         "repair": "Repair needs 20 productive minutes at no more than the published repair speed. Only the minutes actually spent at or below that speed count, so a step spent decelerating earns partial credit. It runs concurrently with movement and passive observation and retains progress across interrupted command windows.",
         "employment": "An employ order names one published weapon or countermeasure, a target, a basis of existing report ids, and confirm. The ordered depth and speed must lie inside that item's envelope. The launch needs the whole five-minute step inside the envelope; a step spent reaching it is deferred and expends nothing. confirm false is fire control asking for confirmation: no time passes and nothing is expended. confirm true launches even when the patrol orders do not authorize that employment. One completed launch expends one unit. A homing round then runs on later steps at its published speed, and the command window ends when it is in the water. Countermeasures use target none.",
         "towed_array": "stream_array needs 15 productive minutes at 8 knots or less; recover_array needs 10. Only minutes actually spent at or below that speed count, including a step spent decelerating, and progress is kept across interrupted windows. Hull and flank still listen during those activities. Recovery marks the towed receiver recovering before that step's listening, so the towed array does not keep bearings while it is being recovered. While the array is streaming, streamed or recovering, ordered speed may not exceed the published limit for that state. A turn, or the five minutes after one, marks the towed receiver unstable, including a turn on the step that finishes streaming; the engine does not calculate cable shape or layback.",
-        "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. Own-ship narrowband lines follow the published operating-state spectrum rules, but opposing detection does not use that spectrum. Selecting a quieter plant state carries no direct counter-detection benefit beyond the speed it permits. Opposing detection uses own-ship speed, the shared transmission-loss model, receiver depth and active transmission.",
+        "operating_mode": "A commanded operating mode takes effect once actual speed and depth satisfy that mode's published limits; until then the previous mode remains in force. Own-ship narrowband lines follow the published operating-state spectrum rules, but opposing detection does not use that spectrum for tonal matching. Opposing detection uses own-ship speed, the achieved mode's relative_noise as radiated source level, the shared transmission-loss model, receiver depth and active transmission. Own-ship self-noise for reception also includes that mode term, scaled by each receiver's pump_coupling, so a quieter plant improves listening as well as counter-detection.",
     },
     "order_fields": {
         "required": ["id", "expected_turn", "activity", "minutes", "course", "speed", "depth", "operating_mode", "interrupt_on"],
@@ -496,6 +496,7 @@ def reception_signal_excess(state, source, receiver, mode="passive", extra_di=0.
     own = state["own"]
     listening_own_ship = receiver.get("id") == own.get("id")
     pump = bool(state.get("pump_fault")) if listening_own_ship else False
+    relative = entity_noise(own) if listening_own_ship else 1.0
     water = state["environment"]["true"]["water_depth_feet"]
     if array_spec is None:
         array_id = None if array is None else array.get("id")
@@ -517,7 +518,11 @@ def reception_signal_excess(state, source, receiver, mode="passive", extra_di=0.
             acoustics.ACTIVE_SOURCE_LEVEL_DB,
             loss.transmission_loss_db,
             acoustics.noise_level_db(
-                frequency, own["speed"], pump, array_spec=array_spec
+                frequency,
+                own["speed"],
+                pump,
+                array_spec=array_spec,
+                relative_noise=relative,
             ),
             array["directivity_index_db"] + extra_di + gain,
             acoustics.ACTIVE_DT_DB,
@@ -538,7 +543,11 @@ def reception_signal_excess(state, source, receiver, mode="passive", extra_di=0.
         acoustics.source_level_db(contact_kind(source), entity_noise(source)),
         loss.transmission_loss_db,
         acoustics.noise_level_db(
-            frequency, receiver["speed"], pump, array_spec=array_spec
+            frequency,
+            receiver["speed"],
+            pump,
+            array_spec=array_spec,
+            relative_noise=relative,
         ),
         array["directivity_index_db"] + extra_di + gain,
         acoustics.PASSIVE_DT_DB,
@@ -866,7 +875,9 @@ def _acoustic_belief(state, actor, dice, active):
         array["depth_feet"],
         frequency,
     )
-    source_level = acoustics.own_ship_source_level_db(own["speed"], active=active)
+    source_level = acoustics.own_ship_source_level_db(
+        own["speed"], entity_noise(own), active=active
+    )
     noise = acoustics.noise_level_db(
         frequency, actor["speed"], baseline=acoustics.OPPONENT_AMBIENT_NL_AT_1KHZ_DB
     )
@@ -2653,13 +2664,17 @@ def capability_report():
         "definitions": public_entity_catalog(),
         "own_ship_operating_mode": {
             "speed_limit_enforced": True,
-            "radiated_noise_modeled": False,
+            "radiated_noise_modeled": True,
+            "self_noise_modeled": True,
             "description": (
                 "An operating mode caps own-ship speed and selects which of "
                 "own ship's defined narrowband lines are emitted. Opposing "
-                "detection does not use that spectrum. It uses own-ship speed, "
-                "the shared transmission-loss model, receiver depth, range and "
-                "active transmission."
+                "detection does not match that spectrum tonally. It uses "
+                "own-ship speed, the achieved mode's relative_noise for "
+                "radiated source level, the shared transmission-loss model, "
+                "receiver depth, range and active transmission. Own-ship "
+                "self-noise for reception also includes that mode term, "
+                "scaled by each receiver's pump_coupling."
             ),
         },
         "maneuver_transients": {

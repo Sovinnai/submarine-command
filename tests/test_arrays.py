@@ -75,6 +75,25 @@ class CoverageTests(unittest.TestCase):
         towed = arrays.self_noise_adjustment_db(arrays.TOWED, 5.0, pump_fault=True)
         self.assertGreater(hull, towed)
 
+    def test_plant_mode_self_noise_couples_more_to_hull_than_towed(self):
+        import math
+        baseline_hull = arrays.self_noise_adjustment_db(arrays.HULL, 5.0, relative_noise=1.0)
+        quiet_hull = arrays.self_noise_adjustment_db(arrays.HULL, 5.0, relative_noise=0.72)
+        loud_hull = arrays.self_noise_adjustment_db(arrays.HULL, 5.0, relative_noise=1.65)
+        quiet_towed = arrays.self_noise_adjustment_db(arrays.TOWED, 5.0, relative_noise=0.72)
+        loud_towed = arrays.self_noise_adjustment_db(arrays.TOWED, 5.0, relative_noise=1.65)
+        self.assertAlmostEqual(baseline_hull, 0.0)
+        self.assertAlmostEqual(
+            quiet_hull - baseline_hull,
+            arrays.plant_mode_noise_db(0.72, arrays.HULL.pump_coupling),
+        )
+        self.assertAlmostEqual(
+            loud_hull - baseline_hull,
+            10.0 * math.log10(1.65),
+        )
+        self.assertLess(quiet_hull, loud_hull)
+        self.assertLess(loud_towed - quiet_towed, loud_hull - quiet_hull)
+
 
 class DeploymentTests(unittest.TestCase):
     def order(self, game, **kwargs):

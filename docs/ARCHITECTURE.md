@@ -66,8 +66,10 @@ retains shell access under the same account remains policy-only isolation.
   supported, uncertain or outside the model's scope.
 - Representative frequencies remain for path-scope display and for opposing
   detection of own ship. Contact reception uses numeric narrowband spectra.
-- Opposing detection of own ship follows speed, not the narrowband signature
-  or own-ship operating mode.
+- Opposing detection of own ship follows speed and the achieved operating
+  mode's relative_noise for radiated source level. It does not match the
+  narrowband signature tonally. Own-ship self-noise for reception also
+  includes that mode term, scaled by each receiver's pump_coupling.
 - Crew assessments cite one shared set of reports. Disagreement is the two
   priors applied to that evidence, including overlapping spectral features.
 - Bearings-only motion estimates use a constant-course grid and retain every
